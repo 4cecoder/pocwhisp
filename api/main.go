@@ -1,3 +1,45 @@
+// PocWhisp Audio Transcription API
+//
+// A high-performance, production-ready API for audio transcription and summarization
+// using Whisper Large V3 and Llama models. Features include real-time transcription,
+// batch processing, WebSocket streaming, comprehensive security, and enterprise-grade monitoring.
+//
+// Terms Of Service: https://github.com/fource/pocwhisp
+// Schemes: http, https
+// Host: localhost:8080
+// BasePath: /api/v1
+// Version: 1.0.0
+// License: MIT https://opensource.org/licenses/MIT
+// Contact: PocWhisp Support <support@pocwhisp.com> https://github.com/fource/pocwhisp/issues
+//
+// Consumes:
+// - application/json
+// - multipart/form-data
+// - application/octet-stream
+//
+// Produces:
+// - application/json
+//
+// SecurityDefinitions:
+// Bearer:
+//
+//	type: apiKey
+//	name: Authorization
+//	in: header
+//	description: Type "Bearer" followed by a space and JWT token.
+//
+// ApiKeyAuth:
+//
+//	type: apiKey
+//	name: X-API-Key
+//	in: header
+//	description: API key for service-to-service authentication
+//
+// Security:
+// - Bearer: []
+// - ApiKeyAuth: []
+//
+//go:generate swag init
 package main
 
 import (
@@ -5,6 +47,7 @@ import (
 	"os"
 	"os/signal"
 	"pocwhisp/database"
+	"pocwhisp/docs"
 	"pocwhisp/handlers"
 	"pocwhisp/middleware"
 	"pocwhisp/models"
@@ -19,6 +62,7 @@ import (
 	fiberlogger "github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/gofiber/fiber/v2/middleware/requestid"
+	fiberSwagger "github.com/swaggo/fiber-swagger"
 )
 
 const (
@@ -139,15 +183,19 @@ func main() {
 	}
 	batchProcessor := services.NewBatchProcessor(db, aiClient, nil, batchConfig)
 
+	// Initialize authentication service
+	authService := services.GetAuthService()
+
 	// Initialize handlers
 	healthHandler := handlers.NewHealthHandler(db, aiServiceURL)
 	transcribeHandler := handlers.NewTranscribeHandler(db, aiServiceURL)
 	cacheHandler := handlers.NewCacheHandler()
 	batchHandler := handlers.NewBatchHandler(db, batchProcessor)
+	authHandler := handlers.NewAuthHandler(db, authService)
 	wsManager := handlers.NewWebSocketManager(aiClient, db)
 
 	// Routes
-	setupRoutes(app, healthHandler, transcribeHandler, cacheHandler, batchHandler, wsManager)
+	setupRoutes(app, healthHandler, transcribeHandler, cacheHandler, batchHandler, authHandler, wsManager)
 
 	// Graceful shutdown
 	go func() {
@@ -179,7 +227,14 @@ func main() {
 }
 
 // setupRoutes configures all application routes
-func setupRoutes(app *fiber.App, healthHandler *handlers.HealthHandler, transcribeHandler *handlers.TranscribeHandler, cacheHandler *handlers.CacheHandler, batchHandler *handlers.BatchHandler, wsManager *handlers.WebSocketManager) {
+func setupRoutes(app *fiber.App, healthHandler *handlers.HealthHandler, transcribeHandler *handlers.TranscribeHandler, cacheHandler *handlers.CacheHandler, batchHandler *handlers.BatchHandler, authHandler *handlers.AuthHandler, wsManager *handlers.WebSocketManager) {
+	// Initialize Swagger docs
+	docs.SwaggerInfo.Host = getEnv("SWAGGER_HOST", "localhost:8080")
+	docs.SwaggerInfo.BasePath = "/api/v1"
+	docs.SwaggerInfo.Schemes = []string{"http", "https"}
+
+	// Swagger documentation endpoint
+	app.Get("/docs/*", fiberSwagger.WrapHandler)
 	// API version prefix
 	api := app.Group("/api/v1")
 
@@ -204,6 +259,19 @@ func setupRoutes(app *fiber.App, healthHandler *handlers.HealthHandler, transcri
 	})
 	api.Get("/stream", wsManager.HandleWebSocketUpgrade())
 
+	// Authentication endpoints (public)
+	auth := api.Group("/auth")
+	auth.Post("/register", authHandler.Register)
+	auth.Post("/login", authHandler.Login)
+	auth.Post("/refresh", authHandler.RefreshToken)
+	auth.Post("/validate", authHandler.ValidateToken)
+
+	// Protected authentication endpoints
+	auth.Get("/profile", authHandler.GetProfile)
+	auth.Put("/profile", authHandler.UpdateProfile)
+	auth.Post("/logout", authHandler.Logout)
+	auth.Post("/api-key", authHandler.GenerateAPIKey)
+
 	// Cache management endpoints
 	cache := api.Group("/cache")
 	cache.Get("/stats", cacheHandler.GetStats)
@@ -227,18 +295,36 @@ func setupRoutes(app *fiber.App, healthHandler *handlers.HealthHandler, transcri
 	// Root endpoint
 	app.Get("/", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{
-			"service":   "PocWhisp Audio Transcription API",
-			"version":   "1.0.0",
-			"status":    "running",
-			"timestamp": time.Now(),
+			"service":     "PocWhisp Audio Transcription API",
+			"version":     "1.0.0",
+			"status":      "running",
+			"timestamp":   time.Now(),
+			"description": "High-performance audio transcription and summarization API using Whisper Large V3 and Llama models",
 			"endpoints": fiber.Map{
 				"health":     "/api/v1/health",
 				"transcribe": "/api/v1/transcribe",
 				"stream":     "/api/v1/stream",
 				"cache":      "/api/v1/cache",
 				"batch":      "/api/v1/batch",
+				"auth":       "/api/v1/auth",
 				"metrics":    "/api/v1/metrics",
-				"docs":       "/docs", // TODO: Add Swagger docs
+				"docs":       "/docs/",
+			},
+			"documentation": fiber.Map{
+				"swagger_ui": "/docs/",
+				"openapi":    "/docs/doc.json",
+			},
+			"features": []string{
+				"Real-time audio transcription",
+				"Batch processing",
+				"WebSocket streaming",
+				"JWT authentication",
+				"Rate limiting",
+				"Comprehensive monitoring",
+				"Multi-level caching",
+				"Circuit breakers",
+				"Speaker diarization",
+				"AI-powered summarization",
 			},
 		})
 	})

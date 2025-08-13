@@ -267,7 +267,6 @@ func (rl *RateLimiter) checkSlidingWindow(data *windowData, now time.Time) (bool
 
 // checkRedisLimit checks rate limit using Redis storage
 func (rl *RateLimiter) checkRedisLimit(key string) (bool, time.Time, int, error) {
-	ctx := rl.config.Storage.Context()
 	redisKey := fmt.Sprintf("rate_limit:%s", key)
 
 	if rl.config.SlidingWindow {
@@ -286,7 +285,7 @@ func (rl *RateLimiter) checkRedisFixedWindow(redisKey string) (bool, time.Time, 
 	pipe := rl.config.Storage.Pipeline()
 
 	// Get current count
-	getCurrentCmd := pipe.Get(ctx, redisKey)
+	_ = pipe.Get(ctx, redisKey)
 
 	// Increment counter
 	incrCmd := pipe.Incr(ctx, redisKey)

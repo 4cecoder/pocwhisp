@@ -73,6 +73,17 @@ type UserResponse struct {
 }
 
 // Login authenticates a user and returns JWT tokens
+// @Summary User login
+// @Description Authenticate a user with username/email and password, returns JWT tokens
+// @Tags Authentication
+// @Accept json
+// @Produce json
+// @Param request body LoginRequest true "Login credentials"
+// @Success 200 {object} AuthResponse "Login successful"
+// @Failure 400 {object} models.ErrorResponse "Invalid request body"
+// @Failure 401 {object} models.ErrorResponse "Invalid credentials or account disabled"
+// @Failure 500 {object} models.ErrorResponse "Internal server error"
+// @Router /auth/login [post]
 func (ah *AuthHandler) Login(c *fiber.Ctx) error {
 	var req LoginRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -192,6 +203,17 @@ func (ah *AuthHandler) Login(c *fiber.Ctx) error {
 }
 
 // Register creates a new user account
+// @Summary User registration
+// @Description Create a new user account with username, email, and password
+// @Tags Authentication
+// @Accept json
+// @Produce json
+// @Param request body RegisterRequest true "Registration details"
+// @Success 201 {object} UserResponse "Registration successful"
+// @Failure 400 {object} models.ErrorResponse "Invalid request body"
+// @Failure 409 {object} models.ErrorResponse "Username or email already exists"
+// @Failure 500 {object} models.ErrorResponse "Internal server error"
+// @Router /auth/register [post]
 func (ah *AuthHandler) Register(c *fiber.Ctx) error {
 	var req RegisterRequest
 	if err := c.BodyParser(&req); err != nil {
@@ -365,6 +387,17 @@ func (ah *AuthHandler) RefreshToken(c *fiber.Ctx) error {
 }
 
 // GetProfile returns the current user's profile
+// @Summary Get user profile
+// @Description Get the authenticated user's profile information
+// @Tags Authentication
+// @Accept json
+// @Produce json
+// @Success 200 {object} UserResponse "User profile"
+// @Failure 401 {object} models.ErrorResponse "User not authenticated"
+// @Failure 404 {object} models.ErrorResponse "User not found"
+// @Failure 500 {object} models.ErrorResponse "Internal server error"
+// @Security Bearer
+// @Router /auth/profile [get]
 func (ah *AuthHandler) GetProfile(c *fiber.Ctx) error {
 	userID := middleware.GetUserID(c)
 	if userID == "" {

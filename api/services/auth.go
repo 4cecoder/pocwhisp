@@ -149,11 +149,19 @@ func (as *AuthService) ValidateAccessToken(tokenString string) (*JWTClaims, erro
 
 	if claims, ok := token.Claims.(*JWTClaims); ok && token.Valid {
 		// Additional validation
-		if !claims.VerifyIssuer(as.issuer, true) {
+		if claims.Issuer != as.issuer {
 			return nil, fmt.Errorf("invalid issuer")
 		}
 
-		if !claims.VerifyAudience(as.audience, true) {
+		// Check audience
+		validAudience := false
+		for _, aud := range claims.Audience {
+			if aud == as.audience {
+				validAudience = true
+				break
+			}
+		}
+		if !validAudience {
 			return nil, fmt.Errorf("invalid audience")
 		}
 
@@ -177,11 +185,19 @@ func (as *AuthService) ValidateRefreshToken(tokenString string) (string, error) 
 	}
 
 	if claims, ok := token.Claims.(*jwt.RegisteredClaims); ok && token.Valid {
-		if !claims.VerifyIssuer(as.issuer, true) {
+		if claims.Issuer != as.issuer {
 			return "", fmt.Errorf("invalid issuer")
 		}
 
-		if !claims.VerifyAudience(as.audience, true) {
+		// Check audience
+		validAudience := false
+		for _, aud := range claims.Audience {
+			if aud == as.audience {
+				validAudience = true
+				break
+			}
+		}
+		if !validAudience {
 			return "", fmt.Errorf("invalid audience")
 		}
 

@@ -1,0 +1,488 @@
+definitions:
+  handlers.AuthResponse:
+    properties:
+      expires_at:
+        type: string
+      message:
+        type: string
+      tokens:
+        $ref: '#/definitions/services.TokenPair'
+      user:
+        $ref: '#/definitions/handlers.UserResponse'
+    type: object
+  handlers.LoginRequest:
+    properties:
+      password:
+        type: string
+      remember:
+        type: boolean
+      username:
+        type: string
+    required:
+    - password
+    - username
+    type: object
+  handlers.RegisterRequest:
+    properties:
+      email:
+        type: string
+      password:
+        minLength: 8
+        type: string
+      roles:
+        items:
+          type: string
+        type: array
+      username:
+        maxLength: 50
+        minLength: 3
+        type: string
+    required:
+    - email
+    - password
+    - username
+    type: object
+  handlers.UserResponse:
+    properties:
+      created_at:
+        type: string
+      email:
+        type: string
+      id:
+        type: string
+      is_active:
+        type: boolean
+      last_login:
+        type: string
+      roles:
+        items:
+          type: string
+        type: array
+      username:
+        type: string
+    type: object
+  models.AsyncResponse:
+    description: Response for asynchronous operations that are queued for processing
+    properties:
+      check_url:
+        example: /api/v1/transcribe/job_12345
+        type: string
+      estimated_eta:
+        example: 30s
+        type: string
+      job_id:
+        example: job_12345
+        type: string
+      message:
+        example: Audio file queued for processing
+        type: string
+      request_id:
+        example: req_12345
+        type: string
+      status:
+        example: queued
+        type: string
+      timestamp:
+        example: "2023-10-15T14:30:45Z"
+        type: string
+    type: object
+  models.ErrorResponse:
+    properties:
+      code:
+        type: integer
+      error:
+        type: string
+      message:
+        type: string
+      request_id:
+        type: string
+      timestamp:
+        type: string
+    type: object
+  models.HealthResponse:
+    properties:
+      dependencies:
+        additionalProperties:
+          type: string
+        description: dependency status
+        type: object
+      gpu_available:
+        description: GPU availability
+        type: boolean
+      last_checked:
+        description: last health check time
+        type: string
+      memory_usage:
+        additionalProperties:
+          type: string
+        description: memory usage stats
+        type: object
+      models:
+        additionalProperties:
+          type: string
+        description: model status
+        type: object
+      status:
+        description: '"healthy", "degraded", "unhealthy"'
+        type: string
+      uptime:
+        description: uptime in seconds
+        type: number
+      version:
+        description: API version
+        type: string
+    type: object
+  models.Metadata:
+    properties:
+      duration:
+        description: audio duration in seconds
+        type: number
+      model_versions:
+        allOf:
+        - $ref: '#/definitions/models.ModelVersions'
+        description: AI model versions
+      processed_at:
+        description: timestamp of processing
+        type: string
+      processing_time:
+        description: processing time in seconds
+        type: number
+    type: object
+  models.ModelVersions:
+    properties:
+      llama:
+        description: e.g., "7b"
+        type: string
+      whisper:
+        description: e.g., "large-v3"
+        type: string
+    type: object
+  models.Summary:
+    description: AI-generated summary of the transcribed audio content
+    properties:
+      key_points:
+        description: extracted key points
+        example:
+        - '["Project timeline discussion"'
+        - ' "Budget allocation"'
+        - ' "Team assignments"]'
+        items:
+          type: string
+        type: array
+      sentiment:
+        description: '"positive", "neutral", "negative"'
+        example: positive
+        type: string
+      text:
+        description: main summary text
+        example: This conversation discusses project planning and resource allocation.
+        type: string
+    type: object
+  models.Transcript:
+    description: Complete transcription result containing all segments
+    properties:
+      segments:
+        items:
+          $ref: '#/definitions/models.TranscriptSegment'
+        type: array
+    type: object
+  models.TranscriptSegment:
+    description: A single segment of transcribed audio with speaker information and
+      timing
+    properties:
+      end_time:
+        description: in seconds
+        example: 3.2
+        type: number
+      speaker:
+        description: '"left" or "right"'
+        example: left
+        type: string
+      start_time:
+        description: in seconds
+        example: 0.5
+        type: number
+      text:
+        description: transcribed text
+        example: Hello, this is a test.
+        type: string
+    type: object
+  models.TranscriptionResponse:
+    properties:
+      metadata:
+        $ref: '#/definitions/models.Metadata'
+      summary:
+        $ref: '#/definitions/models.Summary'
+      transcript:
+        $ref: '#/definitions/models.Transcript'
+    type: object
+  services.TokenPair:
+    properties:
+      access_token:
+        type: string
+      expires_in:
+        type: integer
+      refresh_token:
+        type: string
+      token_type:
+        type: string
+    type: object
+info:
+  contact: {}
+paths:
+  /auth/login:
+    post:
+      consumes:
+      - application/json
+      description: Authenticate a user with username/email and password, returns JWT
+        tokens
+      parameters:
+      - description: Login credentials
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.LoginRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Login successful
+          schema:
+            $ref: '#/definitions/handlers.AuthResponse'
+        "400":
+          description: Invalid request body
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "401":
+          description: Invalid credentials or account disabled
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: User login
+      tags:
+      - Authentication
+  /auth/profile:
+    get:
+      consumes:
+      - application/json
+      description: Get the authenticated user's profile information
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: User profile
+          schema:
+            $ref: '#/definitions/handlers.UserResponse'
+        "401":
+          description: User not authenticated
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: User not found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - Bearer: []
+      summary: Get user profile
+      tags:
+      - Authentication
+  /auth/register:
+    post:
+      consumes:
+      - application/json
+      description: Create a new user account with username, email, and password
+      parameters:
+      - description: Registration details
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/handlers.RegisterRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Registration successful
+          schema:
+            $ref: '#/definitions/handlers.UserResponse'
+        "400":
+          description: Invalid request body
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "409":
+          description: Username or email already exists
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: User registration
+      tags:
+      - Authentication
+  /health:
+    get:
+      consumes:
+      - application/json
+      description: Get the current health status of the API and all its dependencies
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: API is healthy
+          schema:
+            $ref: '#/definitions/models.HealthResponse'
+        "503":
+          description: API is unhealthy
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Check API health
+      tags:
+      - Health
+  /live:
+    get:
+      consumes:
+      - application/json
+      description: Simple health check to verify the API is running
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: API is alive
+          schema:
+            $ref: '#/definitions/models.HealthResponse'
+      summary: Check API liveness
+      tags:
+      - Health
+  /ready:
+    get:
+      consumes:
+      - application/json
+      description: Check if the API is ready to accept requests
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: API is ready
+          schema:
+            $ref: '#/definitions/models.HealthResponse'
+        "503":
+          description: API is not ready
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Check API readiness
+      tags:
+      - Health
+  /transcribe:
+    post:
+      consumes:
+      - multipart/form-data
+      description: Upload an audio file for transcription and optional summarization
+      parameters:
+      - description: Audio file (WAV, MP3, FLAC, M4A)
+        in: formData
+        name: file
+        required: true
+        type: file
+      - description: Enable AI summarization of the transcript
+        in: formData
+        name: enable_summarization
+        type: boolean
+      - description: Transcription quality (high, medium, low)
+        enum:
+        - high
+        - medium
+        - low
+        in: formData
+        name: quality
+        type: string
+      - description: Language code for transcription (auto-detect if not specified)
+        in: formData
+        name: language
+        type: string
+      - description: Enable stereo channel separation for speaker diarization
+        in: formData
+        name: channel_separation
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Transcription completed successfully
+          schema:
+            $ref: '#/definitions/models.TranscriptionResponse'
+        "202":
+          description: Transcription queued for processing
+          schema:
+            $ref: '#/definitions/models.AsyncResponse'
+        "400":
+          description: Invalid request or file format
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "413":
+          description: File too large
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "415":
+          description: Unsupported media type
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "429":
+          description: Rate limit exceeded
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - Bearer: []
+      - ApiKeyAuth: []
+      summary: Upload and transcribe audio file
+      tags:
+      - Transcription
+  /transcribe/{id}:
+    get:
+      consumes:
+      - application/json
+      description: Retrieve a previously completed transcription by its session ID
+      parameters:
+      - description: Session ID for the transcription
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Transcription found
+          schema:
+            $ref: '#/definitions/models.TranscriptionResponse'
+        "400":
+          description: Invalid session ID
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Transcription not found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      security:
+      - Bearer: []
+      - ApiKeyAuth: []
+      summary: Get transcription by session ID
+      tags:
+      - Transcription
+swagger: "2.0"

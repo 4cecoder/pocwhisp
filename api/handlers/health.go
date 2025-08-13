@@ -29,6 +29,14 @@ func NewHealthHandler(db *gorm.DB, aiServiceURL string) *HealthHandler {
 }
 
 // CheckHealth handles the GET /health endpoint
+// @Summary Check API health
+// @Description Get the current health status of the API and all its dependencies
+// @Tags Health
+// @Accept json
+// @Produce json
+// @Success 200 {object} models.HealthResponse "API is healthy"
+// @Success 503 {object} models.ErrorResponse "API is unhealthy"
+// @Router /health [get]
 func (h *HealthHandler) CheckHealth(c *fiber.Ctx) error {
 	now := time.Now()
 	uptime := now.Sub(startTime).Seconds()
@@ -109,6 +117,14 @@ func (h *HealthHandler) CheckHealth(c *fiber.Ctx) error {
 }
 
 // CheckReadiness handles the GET /ready endpoint
+// @Summary Check API readiness
+// @Description Check if the API is ready to accept requests
+// @Tags Health
+// @Accept json
+// @Produce json
+// @Success 200 {object} models.HealthResponse "API is ready"
+// @Success 503 {object} models.ErrorResponse "API is not ready"
+// @Router /ready [get]
 func (h *HealthHandler) CheckReadiness(c *fiber.Ctx) error {
 	// Check if all critical components are ready
 	ready := true
@@ -142,6 +158,13 @@ func (h *HealthHandler) CheckReadiness(c *fiber.Ctx) error {
 }
 
 // CheckLiveness handles the GET /live endpoint
+// @Summary Check API liveness
+// @Description Simple health check to verify the API is running
+// @Tags Health
+// @Accept json
+// @Produce json
+// @Success 200 {object} models.HealthResponse "API is alive"
+// @Router /live [get]
 func (h *HealthHandler) CheckLiveness(c *fiber.Ctx) error {
 	// Simple liveness check - if we can respond, we're alive
 	return c.JSON(fiber.Map{

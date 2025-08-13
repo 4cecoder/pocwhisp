@@ -40,6 +40,26 @@ func NewTranscribeHandler(db *gorm.DB, aiServiceURL string) *TranscribeHandler {
 }
 
 // UploadAudio handles the POST /transcribe endpoint
+// @Summary Upload and transcribe audio file
+// @Description Upload an audio file for transcription and optional summarization
+// @Tags Transcription
+// @Accept multipart/form-data
+// @Produce json
+// @Param file formData file true "Audio file (WAV, MP3, FLAC, M4A)"
+// @Param enable_summarization formData boolean false "Enable AI summarization of the transcript"
+// @Param quality formData string false "Transcription quality (high, medium, low)" Enums(high, medium, low)
+// @Param language formData string false "Language code for transcription (auto-detect if not specified)"
+// @Param channel_separation formData boolean false "Enable stereo channel separation for speaker diarization"
+// @Success 200 {object} models.TranscriptionResponse "Transcription completed successfully"
+// @Success 202 {object} models.AsyncResponse "Transcription queued for processing"
+// @Failure 400 {object} models.ErrorResponse "Invalid request or file format"
+// @Failure 413 {object} models.ErrorResponse "File too large"
+// @Failure 415 {object} models.ErrorResponse "Unsupported media type"
+// @Failure 429 {object} models.ErrorResponse "Rate limit exceeded"
+// @Failure 500 {object} models.ErrorResponse "Internal server error"
+// @Security Bearer
+// @Security ApiKeyAuth
+// @Router /transcribe [post]
 func (h *TranscribeHandler) UploadAudio(c *fiber.Ctx) error {
 	startTime := time.Now()
 
@@ -223,6 +243,19 @@ func (h *TranscribeHandler) UploadAudio(c *fiber.Ctx) error {
 }
 
 // GetTranscription handles GET /transcribe/:id endpoint
+// @Summary Get transcription by session ID
+// @Description Retrieve a previously completed transcription by its session ID
+// @Tags Transcription
+// @Accept json
+// @Produce json
+// @Param id path string true "Session ID for the transcription"
+// @Success 200 {object} models.TranscriptionResponse "Transcription found"
+// @Failure 400 {object} models.ErrorResponse "Invalid session ID"
+// @Failure 404 {object} models.ErrorResponse "Transcription not found"
+// @Failure 500 {object} models.ErrorResponse "Internal server error"
+// @Security Bearer
+// @Security ApiKeyAuth
+// @Router /transcribe/{id} [get]
 func (h *TranscribeHandler) GetTranscription(c *fiber.Ctx) error {
 	sessionID := c.Params("id")
 	if sessionID == "" {
