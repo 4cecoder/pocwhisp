@@ -6,14 +6,15 @@ import (
 	"os/signal"
 	"pocwhisp/database"
 	"pocwhisp/handlers"
+	"pocwhisp/middleware"
 	"pocwhisp/services"
+	"pocwhisp/utils"
 	"syscall"
 	"time"
 
 	"github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
-	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/gofiber/fiber/v2/middleware/requestid"
 )
@@ -24,6 +25,22 @@ const (
 )
 
 func main() {
+	// Initialize logging
+	utils.InitializeLogger()
+	logger := utils.GetLogger()
+
+	// Initialize metrics
+	services.InitializeMetrics()
+
+	// Initialize circuit breakers
+	services.InitializeCircuitBreakers()
+
+	// Initialize degradation manager
+	services.InitializeDegradationManager()
+
+	// Initialize health monitoring
+	services.InitializeHealthMonitor("1.0.0", getEnv("ENVIRONMENT", "development"))
+
 	// Initialize database
 	db, err := database.Initialize(nil) // Use default config
 	if err != nil {
@@ -36,11 +53,13 @@ func main() {
 	redisURL := getEnv("REDIS_URL", cacheConfig.RedisURL)
 	cacheConfig.RedisURL = redisURL
 
+	var cache *services.MultiLevelCache
 	if err := services.InitializeCache(cacheConfig); err != nil {
 		log.Printf("Failed to initialize cache: %v", err)
 		log.Println("Continuing without cache...")
 	} else {
 		log.Printf("Cache initialized with Redis at %s", redisURL)
+		cache = services.GetCache()
 		defer services.ShutdownCache()
 	}
 
@@ -63,16 +82,23 @@ func main() {
 
 	app.Use(requestid.New())
 
+	app.Use(cors.New(cors.Config{
+		AllowOrigins: "*",
+		AllowMethods: "GET,POST,HEAD,PUT,DELETE,PATCH,OPTIONS",
+		AllowHeaders: "Origin,Content-Type,Accept,Authorization,X-Requested-With,X-Request-ID",
+	}))
+
+	// Add resilience middleware
+	resilienceConfig := middleware.DefaultResilienceConfig()
+	app.Use(middleware.ResilienceMiddleware(resilienceConfig))
+
+	// Add metrics middleware
+	app.Use(middleware.MetricsMiddleware())
+
 	app.Use(logger.New(logger.Config{
 		Format:     "[${time}] ${status} - ${latency} ${method} ${path} ${queryParams} - ${ip} - ${ua}\n",
 		TimeFormat: "2006-01-02 15:04:05",
 		TimeZone:   "UTC",
-	}))
-
-	app.Use(cors.New(cors.Config{
-		AllowOrigins: "*",
-		AllowMethods: "GET,POST,HEAD,PUT,DELETE,PATCH,OPTIONS",
-		AllowHeaders: "Origin,Content-Type,Accept,Authorization,X-Requested-With",
 	}))
 
 	// Get configuration from environment
@@ -81,6 +107,12 @@ func main() {
 
 	// Initialize AI client
 	aiClient := services.NewAIClient(aiServiceURL)
+
+	// Register health checkers
+	services.RegisterHealthCheckers(db, cache, aiClient, nil)
+
+	// Setup fallback strategies
+	services.SetupFallbackStrategies(cache, nil)
 
 	// Initialize handlers
 	healthHandler := handlers.NewHealthHandler(db, aiServiceURL)
