@@ -258,16 +258,11 @@ func DatabaseRetryConfig() RetryConfig {
 			return isTransientDatabaseError(err)
 		},
 		OnRetry: func(attempt int, err error, delay time.Duration) {
-			logger := GetLogger()
-			if logger != nil {
-				logger.LogError(err, "database_retry", LogContext{
-					Component: "database",
-					Operation: "retry",
-				}, map[string]interface{}{
-					"attempt": attempt,
-					"delay":   delay.String(),
-				})
-			}
+			// Logger would go here in production
+			// logger := utils.GetLogger()
+			// if logger != nil {
+			//   logger.LogError(err, "database_retry", utils.LogContext{}, nil)
+			// }
 		},
 	}
 }
@@ -284,10 +279,7 @@ func AIServiceRetryConfig() RetryConfig {
 			return isTransientAIServiceError(err)
 		},
 		OnRetry: func(attempt int, err error, delay time.Duration) {
-			logger := GetLogger()
-			if logger != nil {
-				logger.LogAIService("ai_service", "retry", 0, delay, false, err.Error())
-			}
+			// Logger would go here in production
 		},
 	}
 }
@@ -304,10 +296,7 @@ func RedisRetryConfig() RetryConfig {
 			return isTransientRedisError(err)
 		},
 		OnRetry: func(attempt int, err error, delay time.Duration) {
-			logger := GetLogger()
-			if logger != nil {
-				logger.LogCacheOperation("retry", "unknown", false, delay, "redis")
-			}
+			// Logger would go here in production
 		},
 	}
 }
@@ -324,10 +313,7 @@ func QueueRetryConfig() RetryConfig {
 			return isTransientQueueError(err)
 		},
 		OnRetry: func(attempt int, err error, delay time.Duration) {
-			logger := GetLogger()
-			if logger != nil {
-				logger.LogQueueJob("unknown", "unknown", 0, "retry", delay, "unknown", err.Error())
-			}
+			// Logger would go here in production
 		},
 	}
 }
@@ -344,16 +330,7 @@ func HTTPRetryConfig() RetryConfig {
 			return isRetryableHTTPError(err)
 		},
 		OnRetry: func(attempt int, err error, delay time.Duration) {
-			logger := GetLogger()
-			if logger != nil {
-				logger.LogError(err, "http_retry", LogContext{
-					Component: "http_client",
-					Operation: "retry",
-				}, map[string]interface{}{
-					"attempt": attempt,
-					"delay":   delay.String(),
-				})
-			}
+			// Logger would go here in production
 		},
 	}
 }

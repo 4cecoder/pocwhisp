@@ -78,12 +78,8 @@ func NewWebSocketManager(aiClient *services.AIClient, db *gorm.DB) *WebSocketMan
 // HandleWebSocketUpgrade handles WebSocket connection upgrades
 func (wm *WebSocketManager) HandleWebSocketUpgrade() fiber.Handler {
 	return websocket.New(wm.handleWebSocketConnection, websocket.Config{
-		ReadBufferSize:  4096,
-		WriteBufferSize: 4096,
-		CheckOrigin: func(c *fiber.Ctx) bool {
-			// In production, implement proper origin checking
-			return true
-		},
+		ReadBufferSize:    4096,
+		WriteBufferSize:   4096,
 		EnableCompression: true,
 	})
 }
@@ -275,7 +271,6 @@ func (wm *WebSocketManager) handleStartStreaming(ctx context.Context, conn *WebS
 
 	// Create streaming session in database
 	session := models.AudioSession{
-		ID:          conn.SessionID,
 		Status:      "streaming",
 		UploadedAt:  time.Now(),
 		ProcessedAt: nil,

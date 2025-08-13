@@ -16,6 +16,7 @@ import (
 	"github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
+	fiberlogger "github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/gofiber/fiber/v2/middleware/requestid"
 )
@@ -28,7 +29,7 @@ const (
 func main() {
 	// Initialize logging
 	utils.InitializeLogger()
-	logger := utils.GetLogger()
+	_ = utils.GetLogger() // Initialize logger
 
 	// Initialize metrics
 	services.InitializeMetrics()
@@ -96,7 +97,7 @@ func main() {
 	// Add metrics middleware
 	app.Use(middleware.MetricsMiddleware())
 
-	app.Use(logger.New(logger.Config{
+	app.Use(fiberlogger.New(fiberlogger.Config{
 		Format:     "[${time}] ${status} - ${latency} ${method} ${path} ${queryParams} - ${ip} - ${ua}\n",
 		TimeFormat: "2006-01-02 15:04:05",
 		TimeZone:   "UTC",
@@ -107,7 +108,7 @@ func main() {
 	aiServiceURL := getEnv("AI_SERVICE_URL", DefaultAIService)
 
 	// Initialize AI client
-	aiClient := services.NewAIClient(aiServiceURL)
+	aiClient := services.NewAIClient(aiServiceURL, 60*time.Second)
 
 	// Register health checkers
 	services.RegisterHealthCheckers(db, cache, aiClient, nil)

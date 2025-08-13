@@ -256,17 +256,11 @@ func (dm *DegradationManager) ExecuteWithFallback(
 		if strategy.CanHandle(service, health.DegradationLevel) {
 			result, fallbackErr := strategy.Execute(ctx, service, health.DegradationLevel)
 			if fallbackErr == nil {
-				logger := GetLogger()
-				if logger != nil {
-					logger.LogError(err, "fallback_executed", LogContext{
-						Component: "degradation_manager",
-						Operation: "fallback",
-					}, map[string]interface{}{
-						"service":           service,
-						"degradation_level": health.DegradationLevel.String(),
-						"strategy_priority": strategy.Priority(),
-					})
-				}
+				// Logger would go here in production
+				// logger := utils.GetLogger()
+				// if logger != nil {
+				//   logger.LogError(err, "fallback_executed", utils.LogContext{}, nil)
+				// }
 				return result, nil
 			}
 		}

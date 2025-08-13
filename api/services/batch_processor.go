@@ -459,8 +459,30 @@ func (bp *BatchProcessor) processSummarization(ctx context.Context, file *models
 
 	result, retryResult := retrier.ExecuteWithResultAndContext(ctx, func(ctx context.Context) (interface{}, error) {
 		request := &SummarizationRequest{
-			Text: transcriptText.String(),
+			Segments: []struct {
+				Speaker    string  `json:"speaker"`
+				StartTime  float64 `json:"start_time"`
+				EndTime    float64 `json:"end_time"`
+				Text       string  `json:"text"`
+				Confidence float64 `json:"confidence"`
+				Language   string  `json:"language,omitempty"`
+			}{},
 		}
+
+		// Convert transcript text to segments (simplified)
+		request.Segments = append(request.Segments, struct {
+			Speaker    string  `json:"speaker"`
+			StartTime  float64 `json:"start_time"`
+			EndTime    float64 `json:"end_time"`
+			Text       string  `json:"text"`
+			Confidence float64 `json:"confidence"`
+			Language   string  `json:"language,omitempty"`
+		}{
+			Speaker:    "combined",
+			Text:       transcriptText.String(),
+			Confidence: 1.0,
+		})
+
 		return bp.aiClient.SummarizeTranscription(request)
 	})
 
@@ -468,7 +490,7 @@ func (bp *BatchProcessor) processSummarization(ctx context.Context, file *models
 		return fmt.Errorf("summarization failed after %d attempts: %w", retryResult.Attempts, retryResult.LastError)
 	}
 
-	summaryResponse, ok := result.(*SummaryResponse)
+	summaryResponse, ok := result.(*SummarizationResponse)
 	if !ok {
 		return fmt.Errorf("invalid summary response type")
 	}
@@ -617,7 +639,7 @@ func (bp *BatchProcessor) saveTranscriptionResult(file *models.BatchJobFile, res
 }
 
 // saveSummaryResult saves summary result to database
-func (bp *BatchProcessor) saveSummaryResult(sessionID string, response *SummaryResponse) (string, error) {
+func (bp *BatchProcessor) saveSummaryResult(sessionID string, response *SummarizationResponse) (string, error) {
 	// Parse sessionID to UUID
 	sessionUUID, err := uuid.Parse(sessionID)
 	if err != nil {
@@ -626,8 +648,9 @@ func (bp *BatchProcessor) saveSummaryResult(sessionID string, response *SummaryR
 
 	summary := &models.SummaryDB{
 		SessionID: sessionUUID,
-		Summary:   response.Summary,
-		KeyPoints: strings.Join(response.KeyPoints, "\n"),
+		Text:      response.Summary.Text,
+		KeyPoints: strings.Join(response.Summary.KeyPoints, "\n"),
+		ModelUsed: "llama-summary",
 		CreatedAt: time.Now(),
 	}
 

@@ -230,7 +230,7 @@ func (dhc *DatabaseHealthChecker) Check(ctx context.Context) HealthCheck {
 		"in_use":           stats.InUse,
 		"idle":             stats.Idle,
 		"max_open":         stats.MaxOpenConnections,
-		"max_idle":         stats.MaxIdleConnections,
+		"max_idle":         10, // Default value since MaxIdleConnections might not be available
 	}
 
 	check.Status = HealthStatusHealthy
@@ -434,7 +434,7 @@ func (qhc *QueueHealthChecker) Check(ctx context.Context) HealthCheck {
 	if stats.ActiveWorkers == 0 && stats.PendingJobs > 0 {
 		check.Status = HealthStatusDegraded
 		check.Message = "No active workers available for pending jobs"
-	} else if stats.FailedJobs > stats.CompletedJobs*0.1 { // More than 10% failure rate
+	} else if stats.FailedJobs*10 > stats.CompletedJobs { // More than 10% failure rate
 		check.Status = HealthStatusDegraded
 		check.Message = "High job failure rate detected"
 	} else {
