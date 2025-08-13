@@ -2,7 +2,7 @@
 # Optimized for GPU support and production deployment
 
 # Base stage with CUDA support
-FROM nvidia/cuda:12.1-devel-ubuntu22.04 AS base
+FROM nvidia/cuda:13.0.0-devel-ubuntu22.04 AS base
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
