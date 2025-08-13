@@ -31,6 +31,19 @@ func main() {
 	}
 	defer database.Close(db)
 
+	// Initialize cache
+	cacheConfig := services.DefaultCacheConfig()
+	redisURL := getEnv("REDIS_URL", cacheConfig.RedisURL)
+	cacheConfig.RedisURL = redisURL
+
+	if err := services.InitializeCache(cacheConfig); err != nil {
+		log.Printf("Failed to initialize cache: %v", err)
+		log.Println("Continuing without cache...")
+	} else {
+		log.Printf("Cache initialized with Redis at %s", redisURL)
+		defer services.ShutdownCache()
+	}
+
 	// Create Fiber app with configuration
 	app := fiber.New(fiber.Config{
 		AppName:               "PocWhisp Audio Transcription API",
@@ -72,10 +85,11 @@ func main() {
 	// Initialize handlers
 	healthHandler := handlers.NewHealthHandler(db, aiServiceURL)
 	transcribeHandler := handlers.NewTranscribeHandler(db, aiServiceURL)
+	cacheHandler := handlers.NewCacheHandler()
 	wsManager := handlers.NewWebSocketManager(aiClient, db)
 
 	// Routes
-	setupRoutes(app, healthHandler, transcribeHandler, wsManager)
+	setupRoutes(app, healthHandler, transcribeHandler, cacheHandler, wsManager)
 
 	// Graceful shutdown
 	go func() {
@@ -102,7 +116,7 @@ func main() {
 }
 
 // setupRoutes configures all application routes
-func setupRoutes(app *fiber.App, healthHandler *handlers.HealthHandler, transcribeHandler *handlers.TranscribeHandler, wsManager *handlers.WebSocketManager) {
+func setupRoutes(app *fiber.App, healthHandler *handlers.HealthHandler, transcribeHandler *handlers.TranscribeHandler, cacheHandler *handlers.CacheHandler, wsManager *handlers.WebSocketManager) {
 	// API version prefix
 	api := app.Group("/api/v1")
 
@@ -127,6 +141,15 @@ func setupRoutes(app *fiber.App, healthHandler *handlers.HealthHandler, transcri
 	})
 	api.Get("/stream", wsManager.HandleWebSocketUpgrade())
 
+	// Cache management endpoints
+	cache := api.Group("/cache")
+	cache.Get("/stats", cacheHandler.GetStats)
+	cache.Get("/health", cacheHandler.GetHealth)
+	cache.Post("/warmup", cacheHandler.WarmUp)
+	cache.Delete("/key/:key", cacheHandler.InvalidateKey)
+	cache.Post("/invalidate/pattern", cacheHandler.InvalidatePattern)
+	cache.Delete("/session/:sessionId", cacheHandler.InvalidateSession)
+
 	// Root endpoint
 	app.Get("/", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{
@@ -138,6 +161,7 @@ func setupRoutes(app *fiber.App, healthHandler *handlers.HealthHandler, transcri
 				"health":     "/api/v1/health",
 				"transcribe": "/api/v1/transcribe",
 				"stream":     "/api/v1/stream",
+				"cache":      "/api/v1/cache",
 				"metrics":    "/api/v1/metrics",
 				"docs":       "/docs", // TODO: Add Swagger docs
 			},

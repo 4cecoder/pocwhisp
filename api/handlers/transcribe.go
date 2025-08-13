@@ -25,14 +25,17 @@ const (
 type TranscribeHandler struct {
 	db       *gorm.DB
 	aiClient *services.AIClient
+	cache    *services.MultiLevelCache
 }
 
 // NewTranscribeHandler creates a new transcribe handler
 func NewTranscribeHandler(db *gorm.DB, aiServiceURL string) *TranscribeHandler {
 	aiClient := services.NewAIClient(aiServiceURL, 60*time.Second)
+	cache := services.GetCache() // Get global cache instance
 	return &TranscribeHandler{
 		db:       db,
 		aiClient: aiClient,
+		cache:    cache,
 	}
 }
 
@@ -230,6 +233,13 @@ func (h *TranscribeHandler) GetTranscription(c *fiber.Ctx) error {
 		})
 	}
 
+	// Try to get from cache first
+	if h.cache != nil {
+		if cachedResult, found := h.cache.GetTranscript(sessionID); found {
+			return c.JSON(cachedResult)
+		}
+	}
+
 	// Parse UUID
 	sessionUUID, err := uuid.Parse(sessionID)
 	if err != nil {
@@ -262,6 +272,12 @@ func (h *TranscribeHandler) GetTranscription(c *fiber.Ctx) error {
 
 	// Convert to response format
 	response := audioSession.ToResponse()
+
+	// Cache the response for future requests
+	if h.cache != nil {
+		h.cache.SetTranscript(sessionID, response)
+	}
+
 	return c.JSON(response)
 }
 
