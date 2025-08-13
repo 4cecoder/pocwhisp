@@ -112,7 +112,7 @@ ENV LOG_LEVEL=INFO
 CMD ["python", "main.py"]
 
 # CPU-only stage for environments without GPU
-FROM python:3.11-slim AS cpu-only
+FROM python:3.13-slim AS cpu-only
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
