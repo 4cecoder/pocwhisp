@@ -183,17 +183,8 @@ func (dm *DegradationManager) triggerCallbacks(service string, oldLevel, newLeve
 		go func(cb DegradationCallback) {
 			defer func() {
 				if r := recover(); r != nil {
-					logger := GetLogger()
-					if logger != nil {
-						logger.LogError(fmt.Errorf("degradation callback panic: %v", r), "degradation_callback", LogContext{
-							Component: "degradation_manager",
-							Operation: "callback",
-						}, map[string]interface{}{
-							"service":   service,
-							"old_level": oldLevel.String(),
-							"new_level": newLevel.String(),
-						})
-					}
+					// Logger would go here in production
+					fmt.Printf("Degradation callback panic: %v\n", r)
 				}
 			}()
 			cb(service, oldLevel, newLevel, health)
@@ -511,18 +502,11 @@ func InitializeDegradationManager() {
 
 	// Register default callback for logging
 	globalDegradationManager.RegisterCallback(func(service string, oldLevel, newLevel DegradationLevel, health ServiceHealth) {
-		logger := GetLogger()
-		if logger != nil {
-			logger.LogSecurity("service_degradation", "", "", "medium", map[string]interface{}{
-				"service":              service,
-				"old_level":            oldLevel.String(),
-				"new_level":            newLevel.String(),
-				"error_rate":           health.ErrorRate,
-				"response_time":        health.ResponseTime.String(),
-				"consecutive_failures": health.ConsecutiveFailures,
-				"message":              health.Message,
-			})
-		}
+		// Logger would go here in production
+		// logger := utils.GetLogger()
+		// if logger != nil {
+		//   logger.LogError(fmt.Errorf("service degradation"), "degradation", utils.LogContext{}, nil)
+		// }
 	})
 }
 

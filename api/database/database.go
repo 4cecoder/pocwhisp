@@ -92,6 +92,8 @@ func runMigrations(db *gorm.DB) error {
 		&models.TranscriptSegmentDB{},
 		&models.SummaryDB{},
 		&models.ProcessingJob{},
+		&models.BatchJob{},
+		&models.BatchJobFile{},
 	}
 
 	for _, model := range models {

@@ -2,7 +2,6 @@ package services
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"math/rand"
 	"time"
@@ -35,14 +34,8 @@ type RetryConfig struct {
 // RetryOperation represents an operation that can be retried
 type RetryOperation func() error
 
-// RetryOperationWithResult represents an operation that returns a result and can be retried
-type RetryOperationWithResult[T any] func() (T, error)
-
 // RetryContext represents an operation with context that can be retried
 type RetryContext func(ctx context.Context) error
-
-// RetryContextWithResult represents an operation with context that returns a result and can be retried
-type RetryContextWithResult[T any] func(ctx context.Context) (T, error)
 
 // RetryResult contains the result of a retry operation
 type RetryResult struct {
@@ -146,15 +139,15 @@ func (r *Retrier) ExecuteWithContext(ctx context.Context, operation RetryContext
 }
 
 // ExecuteWithResult executes an operation that returns a result with retry logic
-func (r *Retrier) ExecuteWithResult[T any](operation RetryOperationWithResult[T]) (T, *RetryResult) {
-	return r.ExecuteWithResultAndContext(context.Background(), func(ctx context.Context) (T, error) {
+func (r *Retrier) ExecuteWithResult(operation func() (interface{}, error)) (interface{}, *RetryResult) {
+	return r.ExecuteWithResultAndContext(context.Background(), func(ctx context.Context) (interface{}, error) {
 		return operation()
 	})
 }
 
 // ExecuteWithResultAndContext executes an operation with context that returns a result with retry logic
-func (r *Retrier) ExecuteWithResultAndContext[T any](ctx context.Context, operation RetryContextWithResult[T]) (T, *RetryResult) {
-	var result T
+func (r *Retrier) ExecuteWithResultAndContext(ctx context.Context, operation func(context.Context) (interface{}, error)) (interface{}, *RetryResult) {
+	var result interface{}
 	retryResult := &RetryResult{}
 	delay := r.config.InitialDelay
 
@@ -375,7 +368,7 @@ func isRetryableError(err error) bool {
 
 	// Check for common retryable error patterns
 	errorMsg := err.Error()
-	
+
 	retryablePatterns := []string{
 		"connection refused",
 		"connection reset",
@@ -404,7 +397,7 @@ func isTransientDatabaseError(err error) bool {
 	}
 
 	errorMsg := err.Error()
-	
+
 	transientPatterns := []string{
 		"connection refused",
 		"connection timeout",
@@ -431,7 +424,7 @@ func isTransientAIServiceError(err error) bool {
 	}
 
 	errorMsg := err.Error()
-	
+
 	transientPatterns := []string{
 		"connection refused",
 		"timeout",
@@ -460,7 +453,7 @@ func isTransientRedisError(err error) bool {
 	}
 
 	errorMsg := err.Error()
-	
+
 	transientPatterns := []string{
 		"connection refused",
 		"connection timeout",
@@ -487,7 +480,7 @@ func isTransientQueueError(err error) bool {
 	}
 
 	errorMsg := err.Error()
-	
+
 	transientPatterns := []string{
 		"connection refused",
 		"timeout",
@@ -512,7 +505,7 @@ func isRetryableHTTPError(err error) bool {
 	}
 
 	errorMsg := err.Error()
-	
+
 	retryablePatterns := []string{
 		"connection refused",
 		"timeout",
@@ -534,12 +527,12 @@ func isRetryableHTTPError(err error) bool {
 
 // Helper function to check if a string contains a substring (case-insensitive)
 func contains(str, substr string) bool {
-	return len(str) >= len(substr) && 
-		   (str == substr || 
-		    len(str) > len(substr) && 
-		    (str[:len(substr)] == substr || 
-		     str[len(str)-len(substr):] == substr ||
-		     indexOf(str, substr) >= 0))
+	return len(str) >= len(substr) &&
+		(str == substr ||
+			len(str) > len(substr) &&
+				(str[:len(substr)] == substr ||
+					str[len(str)-len(substr):] == substr ||
+					indexOf(str, substr) >= 0))
 }
 
 // Simple indexOf implementation
@@ -592,33 +585,33 @@ func WithCustomRetry(config RetryConfig, operation RetryOperation) error {
 // ExponentialBackoff calculates delay using exponential backoff
 func ExponentialBackoff(attempt int, baseDelay time.Duration, maxDelay time.Duration, jitter bool) time.Duration {
 	delay := time.Duration(float64(baseDelay) * math.Pow(2, float64(attempt-1)))
-	
+
 	if jitter {
 		// Add random jitter (±25% of the delay)
 		jitterRange := float64(delay) * 0.25
 		jitterValue := time.Duration(rand.Float64()*jitterRange*2 - jitterRange)
 		delay += jitterValue
 	}
-	
+
 	if delay > maxDelay {
 		delay = maxDelay
 	}
-	
+
 	if delay < baseDelay {
 		delay = baseDelay
 	}
-	
+
 	return delay
 }
 
 // LinearBackoff calculates delay using linear backoff
 func LinearBackoff(attempt int, baseDelay time.Duration, maxDelay time.Duration) time.Duration {
 	delay := time.Duration(int64(baseDelay) * int64(attempt))
-	
+
 	if delay > maxDelay {
 		delay = maxDelay
 	}
-	
+
 	return delay
 }
 

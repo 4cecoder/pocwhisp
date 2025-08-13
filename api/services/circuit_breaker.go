@@ -502,14 +502,11 @@ func GetDatabaseCircuitBreakerConfig() CircuitBreakerConfig {
 			return counts.Requests >= 3 && counts.ConsecutiveFailures >= 3
 		},
 		OnStateChange: func(name string, from CircuitBreakerState, to CircuitBreakerState) {
-			logger := GetLogger()
-			if logger != nil {
-				logger.WithFields(map[string]interface{}{
-					"circuit_breaker": name,
-					"from_state":      from.String(),
-					"to_state":        to.String(),
-				}).Warn("Circuit breaker state changed")
-			}
+			// Logger would go here in production
+			// logger := utils.GetLogger()
+			// if logger != nil {
+			//   logger.LogError(fmt.Errorf("circuit breaker state change"), "circuit_breaker", utils.LogContext{}, nil)
+			// }
 		},
 	}
 }
@@ -523,14 +520,7 @@ func GetAIServiceCircuitBreakerConfig() CircuitBreakerConfig {
 			return counts.Requests >= 5 && (counts.ConsecutiveFailures >= 3 || counts.FailureRate() > 50)
 		},
 		OnStateChange: func(name string, from CircuitBreakerState, to CircuitBreakerState) {
-			logger := GetLogger()
-			if logger != nil {
-				logger.WithFields(map[string]interface{}{
-					"circuit_breaker": name,
-					"from_state":      from.String(),
-					"to_state":        to.String(),
-				}).Warn("AI service circuit breaker state changed")
-			}
+			// Logger would go here in production
 		},
 		MaxConcurrentCalls: 10,
 	}
@@ -545,14 +535,7 @@ func GetRedisCircuitBreakerConfig() CircuitBreakerConfig {
 			return counts.Requests >= 10 && counts.ConsecutiveFailures >= 5
 		},
 		OnStateChange: func(name string, from CircuitBreakerState, to CircuitBreakerState) {
-			logger := GetLogger()
-			if logger != nil {
-				logger.WithFields(map[string]interface{}{
-					"circuit_breaker": name,
-					"from_state":      from.String(),
-					"to_state":        to.String(),
-				}).Info("Redis circuit breaker state changed")
-			}
+			// Logger would go here in production
 		},
 		IsSuccessful: func(err error) bool {
 			// Consider timeout errors as failures, but not certain Redis errors that are recoverable

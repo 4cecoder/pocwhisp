@@ -440,7 +440,7 @@ func (c *MultiLevelCache) statsUpdater() {
 // updateRedisStats updates Redis cache statistics
 func (c *MultiLevelCache) updateRedisStats() {
 	// Get Redis info
-	info, err := c.redis.Info(c.ctx, "memory").Result()
+	_, err := c.redis.Info(c.ctx, "memory").Result()
 	if err != nil {
 		log.Printf("Failed to get Redis info: %v", err)
 		return

@@ -7,6 +7,7 @@ import (
 	"pocwhisp/database"
 	"pocwhisp/handlers"
 	"pocwhisp/middleware"
+	"pocwhisp/models"
 	"pocwhisp/services"
 	"pocwhisp/utils"
 	"syscall"
@@ -114,14 +115,38 @@ func main() {
 	// Setup fallback strategies
 	services.SetupFallbackStrategies(cache, nil)
 
+	// Initialize batch processor
+	batchConfig := services.BatchProcessorConfig{
+		MaxConcurrentJobs: 3,
+		StorageBasePath:   getEnv("BATCH_STORAGE_PATH", "/tmp/batch_processing"),
+		MaxFileSize:       500 * 1024 * 1024, // 500MB
+		SupportedFormats:  []string{"wav", "mp3", "flac", "m4a"},
+		DefaultConfig: models.BatchJobConfig{
+			EnableTranscription:     true,
+			EnableSummarization:     true,
+			EnableChannelSeparation: true,
+			MaxConcurrentFiles:      3,
+			MaxConcurrentChunks:     5,
+			TranscriptionQuality:    "high",
+			SummarizationLength:     "medium",
+			OutputFormat:            "json",
+			IncludeTimestamps:       true,
+			IncludeConfidence:       true,
+			UseGPUAcceleration:      true,
+			ModelCacheEnabled:       true,
+		},
+	}
+	batchProcessor := services.NewBatchProcessor(db, aiClient, nil, batchConfig)
+
 	// Initialize handlers
 	healthHandler := handlers.NewHealthHandler(db, aiServiceURL)
 	transcribeHandler := handlers.NewTranscribeHandler(db, aiServiceURL)
 	cacheHandler := handlers.NewCacheHandler()
+	batchHandler := handlers.NewBatchHandler(db, batchProcessor)
 	wsManager := handlers.NewWebSocketManager(aiClient, db)
 
 	// Routes
-	setupRoutes(app, healthHandler, transcribeHandler, cacheHandler, wsManager)
+	setupRoutes(app, healthHandler, transcribeHandler, cacheHandler, batchHandler, wsManager)
 
 	// Graceful shutdown
 	go func() {
@@ -133,6 +158,11 @@ func main() {
 
 		// Cleanup WebSocket connections
 		wsManager.Cleanup()
+
+		// Shutdown batch processor
+		if err := batchProcessor.Shutdown(); err != nil {
+			log.Printf("Error shutting down batch processor: %v", err)
+		}
 
 		if err := app.Shutdown(); err != nil {
 			log.Printf("Server forced to shutdown: %v", err)
@@ -148,7 +178,7 @@ func main() {
 }
 
 // setupRoutes configures all application routes
-func setupRoutes(app *fiber.App, healthHandler *handlers.HealthHandler, transcribeHandler *handlers.TranscribeHandler, cacheHandler *handlers.CacheHandler, wsManager *handlers.WebSocketManager) {
+func setupRoutes(app *fiber.App, healthHandler *handlers.HealthHandler, transcribeHandler *handlers.TranscribeHandler, cacheHandler *handlers.CacheHandler, batchHandler *handlers.BatchHandler, wsManager *handlers.WebSocketManager) {
 	// API version prefix
 	api := app.Group("/api/v1")
 
@@ -182,6 +212,17 @@ func setupRoutes(app *fiber.App, healthHandler *handlers.HealthHandler, transcri
 	cache.Post("/invalidate/pattern", cacheHandler.InvalidatePattern)
 	cache.Delete("/session/:sessionId", cacheHandler.InvalidateSession)
 
+	// Batch processing endpoints
+	batch := api.Group("/batch")
+	batch.Post("/jobs", batchHandler.CreateBatchJob)
+	batch.Get("/jobs", batchHandler.ListBatchJobs)
+	batch.Get("/jobs/:jobId", batchHandler.GetBatchJob)
+	batch.Post("/jobs/:jobId/start", batchHandler.StartBatchJob)
+	batch.Get("/jobs/:jobId/progress", batchHandler.GetBatchJobProgress)
+	batch.Post("/jobs/:jobId/cancel", batchHandler.CancelBatchJob)
+	batch.Post("/jobs/:jobId/retry", batchHandler.RetryBatchJob)
+	batch.Get("/jobs/:jobId/files", batchHandler.GetBatchJobFiles)
+
 	// Root endpoint
 	app.Get("/", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{
@@ -194,6 +235,7 @@ func setupRoutes(app *fiber.App, healthHandler *handlers.HealthHandler, transcri
 				"transcribe": "/api/v1/transcribe",
 				"stream":     "/api/v1/stream",
 				"cache":      "/api/v1/cache",
+				"batch":      "/api/v1/batch",
 				"metrics":    "/api/v1/metrics",
 				"docs":       "/docs", // TODO: Add Swagger docs
 			},
