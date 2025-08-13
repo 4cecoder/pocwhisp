@@ -1,0 +1,129 @@
+# GitLeaks configuration for PocWhisp
+# Detects secrets and sensitive information in code
+
+title = "PocWhisp Security Configuration"
+
+[extend]
+# Use default GitLeaks rules as base
+useDefault = true
+
+[[rules]]
+id = "aws-access-key"
+description = "AWS Access Key ID"
+regex = '''AKIA[0-9A-Z]{16}'''
+tags = ["aws", "credentials"]
+
+[[rules]]
+id = "aws-secret-key"
+description = "AWS Secret Access Key"
+regex = '''[A-Za-z0-9/+=]{40}'''
+tags = ["aws", "credentials"]
+
+[[rules]]
+id = "database-password"
+description = "Database password in connection string"
+regex = '''(?i)(password|pwd)=([^;\s]+)'''
+tags = ["database", "credentials"]
+
+[[rules]]
+id = "jwt-secret"
+description = "JWT Secret Key"
+regex = '''(?i)(jwt[_-]?secret|jwt[_-]?key)["\s]*[:=]["\s]*([a-zA-Z0-9+/]{32,})'''
+tags = ["jwt", "credentials"]
+
+[[rules]]
+id = "api-key"
+description = "Generic API Key"
+regex = '''(?i)(api[_-]?key|apikey)["\s]*[:=]["\s]*([a-zA-Z0-9]{16,})'''
+tags = ["api", "credentials"]
+
+[[rules]]
+id = "private-key"
+description = "Private Key"
+regex = '''-----BEGIN [A-Z]+ PRIVATE KEY-----'''
+tags = ["private-key", "credentials"]
+
+[[rules]]
+id = "postgres-password"
+description = "PostgreSQL password"
+regex = '''postgres://[^:]+:([^@]+)@'''
+tags = ["postgresql", "credentials"]
+
+[[rules]]
+id = "redis-password"
+description = "Redis password"
+regex = '''redis://[^:]*:([^@]+)@'''
+tags = ["redis", "credentials"]
+
+[[rules]]
+id = "slack-webhook"
+description = "Slack webhook URL"
+regex = '''https://hooks\.slack\.com/services/[A-Z0-9/]+'''
+tags = ["slack", "webhook"]
+
+[[rules]]
+id = "docker-secret"
+description = "Docker secrets in compose files"
+regex = '''(?i)(password|secret|key)["\s]*:["\s]*([^"\s]+)'''
+path = '''docker/.*\.(yml|yaml)$'''
+tags = ["docker", "credentials"]
+
+# Allowlist for known safe patterns
+[allowlist]
+description = "Allowlist for safe patterns"
+paths = [
+    '''\.git/''',
+    '''\.github/workflows/.*\.yml$''',
+    '''tests/.*test.*\.py$''',
+    '''.*\.md$''',
+    '''.*\.txt$''',
+    '''.*\.log$''',
+]
+
+regexes = [
+    # Test/example credentials
+    '''test[_-]?password''',
+    '''example[_-]?key''',
+    '''dummy[_-]?secret''',
+    '''placeholder[_-]?token''',
+
+    # Environment variable references
+    '''\$\{[A-Z_]+\}''',
+    '''\$[A-Z_]+''',
+
+    # Configuration placeholders
+    '''your[_-]?.*[_-]?here''',
+    '''replace[_-]?with[_-]?actual''',
+    '''<[A-Z_]+>''',
+
+    # Common non-secret patterns
+    '''localhost''',
+    '''127\.0\.0\.1''',
+    '''0\.0\.0\.0''',
+
+    # Base64 encoded test data
+    '''data:image/''',
+    '''data:audio/''',
+
+    # Common development values
+    '''development''',
+    '''staging''',
+    '''production''',
+    '''admin''',
+    '''user''',
+    '''guest''',
+]
+
+# Skip specific files that commonly have false positives
+stopwords = [
+    "test",
+    "example",
+    "sample",
+    "demo",
+    "mock",
+    "fake",
+    "dummy",
+    "placeholder",
+    "template",
+    "default",
+]

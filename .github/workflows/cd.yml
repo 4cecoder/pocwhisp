@@ -1,0 +1,470 @@
+name: CD - Continuous Deployment
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Deployment environment"
+        required: true
+        default: "staging"
+        type: choice
+        options:
+          - staging
+          - production
+      force_deploy:
+        description: "Force deployment (skip some checks)"
+        required: false
+        default: false
+        type: boolean
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # =============================================================================
+  # BUILD & PUSH DOCKER IMAGES
+  # =============================================================================
+
+  build-and-push:
+    name: Build & Push Images
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      api-image: ${{ steps.meta-api.outputs.tags }}
+      ai-image: ${{ steps.meta-ai.outputs.tags }}
+      version: ${{ steps.meta-api.outputs.version }}
+    strategy:
+      matrix:
+        service: [api, ai]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta-${{ matrix.service }}
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.service }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/Dockerfile.${{ matrix.service }}
+          target: ${{ matrix.service == 'ai' && 'production' || '' }}
+          push: true
+          tags: ${{ steps.meta-api.outputs.tags || steps.meta-ai.outputs.tags }}
+          labels: ${{ steps.meta-api.outputs.labels || steps.meta-ai.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          platforms: linux/amd64,linux/arm64
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ steps.meta-api.outputs.tags || steps.meta-ai.outputs.tags }}
+          format: spdx-json
+          output-file: sbom-${{ matrix.service }}.spdx.json
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v3
+        with:
+          name: sbom-${{ matrix.service }}
+          path: sbom-${{ matrix.service }}.spdx.json
+
+  # =============================================================================
+  # SECURITY SCANNING
+  # =============================================================================
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: [build-and-push]
+    strategy:
+      matrix:
+        service: [api, ai]
+    steps:
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.service }}:latest
+          format: "sarif"
+          output: "trivy-${{ matrix.service }}.sarif"
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: "trivy-${{ matrix.service }}.sarif"
+
+      - name: Run Snyk security scan
+        uses: snyk/actions/docker@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-${{ matrix.service }}:latest
+          args: --severity-threshold=high
+        continue-on-error: true
+
+  # =============================================================================
+  # STAGING DEPLOYMENT
+  # =============================================================================
+
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [build-and-push]
+    if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'staging')
+    environment:
+      name: staging
+      url: https://staging.pocwhisp.com
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
+
+      - name: Deploy to ECS Staging
+        run: |
+          # Update ECS task definition with new image
+          aws ecs describe-task-definition \
+            --task-definition pocwhisp-staging \
+            --query taskDefinition > task-definition.json
+
+          # Update image URIs
+          jq --arg IMAGE_API "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-api:${{ needs.build-and-push.outputs.version }}" \
+             --arg IMAGE_AI "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-ai:${{ needs.build-and-push.outputs.version }}" \
+             '.containerDefinitions[0].image = $IMAGE_API | .containerDefinitions[1].image = $IMAGE_AI' \
+             task-definition.json > updated-task-definition.json
+
+          # Register new task definition
+          aws ecs register-task-definition \
+            --cli-input-json file://updated-task-definition.json
+
+          # Update service
+          aws ecs update-service \
+            --cluster pocwhisp-staging \
+            --service pocwhisp-api \
+            --task-definition pocwhisp-staging \
+            --force-new-deployment
+
+      - name: Wait for deployment
+        run: |
+          aws ecs wait services-stable \
+            --cluster pocwhisp-staging \
+            --services pocwhisp-api
+
+          echo "✅ Staging deployment completed successfully"
+
+      - name: Run staging smoke tests
+        run: |
+          # Wait for service to be ready
+          sleep 60
+
+          # Basic health check
+          curl -f https://staging.pocwhisp.com/api/v1/health
+
+          # Test file upload with small audio file
+          cd tests
+          curl -X POST -F "audio=@test_audio/test_stereo_5s.wav" \
+            https://staging.pocwhisp.com/api/v1/transcribe
+
+          echo "✅ Staging smoke tests passed"
+
+  # =============================================================================
+  # PRODUCTION DEPLOYMENT
+  # =============================================================================
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build-and-push, security-scan, deploy-staging]
+    if: |
+      (startsWith(github.ref, 'refs/tags/v') && needs.security-scan.result == 'success') || 
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'production')
+    environment:
+      name: production
+      url: https://api.pocwhisp.com
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
+
+      - name: Backup current deployment
+        run: |
+          # Create backup of current task definition
+          aws ecs describe-task-definition \
+            --task-definition pocwhisp-production \
+            --query taskDefinition > backup-task-definition.json
+
+          echo "📦 Backup created: $(date)"
+
+      - name: Deploy to Production (Blue-Green)
+        run: |
+          # Create new task definition
+          aws ecs describe-task-definition \
+            --task-definition pocwhisp-production \
+            --query taskDefinition > task-definition.json
+
+          # Update with new images
+          jq --arg IMAGE_API "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-api:${{ needs.build-and-push.outputs.version }}" \
+             --arg IMAGE_AI "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-ai:${{ needs.build-and-push.outputs.version }}" \
+             '.containerDefinitions[0].image = $IMAGE_API | .containerDefinitions[1].image = $IMAGE_AI' \
+             task-definition.json > updated-task-definition.json
+
+          # Register new task definition
+          NEW_REVISION=$(aws ecs register-task-definition \
+            --cli-input-json file://updated-task-definition.json \
+            --query 'taskDefinition.revision')
+
+          echo "🚀 New task definition registered: revision $NEW_REVISION"
+
+          # Update service with new task definition
+          aws ecs update-service \
+            --cluster pocwhisp-production \
+            --service pocwhisp-api \
+            --task-definition pocwhisp-production:$NEW_REVISION \
+            --deployment-configuration "maximumPercent=200,minimumHealthyPercent=100"
+
+      - name: Monitor deployment health
+        run: |
+          echo "🔍 Monitoring deployment health..."
+
+          # Wait for deployment to stabilize
+          aws ecs wait services-stable \
+            --cluster pocwhisp-production \
+            --services pocwhisp-api \
+            --cli-read-timeout 1200  # 20 minutes timeout
+
+          # Verify all tasks are healthy
+          RUNNING_COUNT=$(aws ecs describe-services \
+            --cluster pocwhisp-production \
+            --services pocwhisp-api \
+            --query 'services[0].runningCount')
+
+          DESIRED_COUNT=$(aws ecs describe-services \
+            --cluster pocwhisp-production \
+            --services pocwhisp-api \
+            --query 'services[0].desiredCount')
+
+          if [ "$RUNNING_COUNT" -eq "$DESIRED_COUNT" ]; then
+            echo "✅ Production deployment successful: $RUNNING_COUNT/$DESIRED_COUNT tasks running"
+          else
+            echo "❌ Production deployment failed: $RUNNING_COUNT/$DESIRED_COUNT tasks running"
+            exit 1
+          fi
+
+      - name: Run production health checks
+        run: |
+          echo "🏥 Running production health checks..."
+
+          # Wait for load balancer to register new targets
+          sleep 120
+
+          # Comprehensive health checks
+          curl -f https://api.pocwhisp.com/api/v1/health
+          curl -f https://api.pocwhisp.com/api/v1/ready
+          curl -f https://api.pocwhisp.com/api/v1/metrics
+
+          # Test with small audio file
+          cd tests
+          RESPONSE=$(curl -X POST -F "audio=@test_audio/test_stereo_5s.wav" \
+            https://api.pocwhisp.com/api/v1/transcribe)
+
+          echo "📊 Test response: $RESPONSE"
+
+          # Verify response contains expected fields
+          echo "$RESPONSE" | jq -e '.transcript.segments[0].text' > /dev/null
+
+          echo "✅ Production health checks passed"
+
+      - name: Update CloudWatch dashboard
+        run: |
+          # Update CloudWatch dashboard with new deployment info
+          aws cloudwatch put-dashboard \
+            --dashboard-name "PocWhisp-Production" \
+            --dashboard-body file://monitoring/cloudwatch-dashboard.json
+
+          echo "📊 CloudWatch dashboard updated"
+
+      - name: Send deployment notification
+        uses: 8398a7/action-slack@v3
+        if: always()
+        with:
+          status: ${{ job.status }}
+          text: |
+            🚀 Production Deployment ${{ job.status }}
+            Version: ${{ needs.build-and-push.outputs.version }}
+            Environment: Production
+            Commit: ${{ github.sha }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # =============================================================================
+  # ROLLBACK CAPABILITY
+  # =============================================================================
+
+  prepare-rollback:
+    name: Prepare Rollback
+    runs-on: ubuntu-latest
+    needs: [deploy-production]
+    if: failure()
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-west-2
+
+      - name: Rollback production deployment
+        run: |
+          echo "🔄 Initiating automatic rollback..."
+
+          # Get previous stable task definition
+          PREVIOUS_REVISION=$(aws ecs list-task-definitions \
+            --family-prefix pocwhisp-production \
+            --status ACTIVE \
+            --sort DESC \
+            --query 'taskDefinitionArns[1]' \
+            --output text | cut -d'/' -f2)
+
+          echo "📦 Rolling back to: $PREVIOUS_REVISION"
+
+          # Update service to previous revision
+          aws ecs update-service \
+            --cluster pocwhisp-production \
+            --service pocwhisp-api \
+            --task-definition "$PREVIOUS_REVISION" \
+            --force-new-deployment
+
+          # Wait for rollback to complete
+          aws ecs wait services-stable \
+            --cluster pocwhisp-production \
+            --services pocwhisp-api
+
+          echo "✅ Rollback completed successfully"
+
+      - name: Notify rollback
+        uses: 8398a7/action-slack@v3
+        with:
+          status: "warning"
+          text: |
+            🔄 AUTOMATIC ROLLBACK EXECUTED
+            Environment: Production
+            Reason: Deployment failure
+            Status: Rollback completed
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # =============================================================================
+  # POST-DEPLOYMENT VALIDATION
+  # =============================================================================
+
+  post-deployment-tests:
+    name: Post-Deployment Validation
+    runs-on: ubuntu-latest
+    needs: [deploy-production]
+    if: success()
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: |
+          pip install requests pytest numpy
+          cd tests && pip install -r requirements.txt
+
+      - name: Run end-to-end tests
+        run: |
+          cd tests
+          python e2e_production_test.py --endpoint=https://api.pocwhisp.com
+        timeout-minutes: 10
+
+      - name: Run load tests
+        run: |
+          cd tests
+          python load_test.py --endpoint=https://api.pocwhisp.com --duration=300 --users=5
+        timeout-minutes: 10
+
+      - name: Validate monitoring
+        run: |
+          # Check that metrics are being reported
+          curl -f https://api.pocwhisp.com/api/v1/metrics | grep -q "http_requests_total"
+
+          echo "✅ Post-deployment validation completed"
+
+  # =============================================================================
+  # DEPLOYMENT SUMMARY
+  # =============================================================================
+
+  deployment-summary:
+    name: Deployment Summary
+    runs-on: ubuntu-latest
+    needs:
+      [build-and-push, deploy-staging, deploy-production, post-deployment-tests]
+    if: always()
+    steps:
+      - name: Generate deployment summary
+        run: |
+          echo "## 🚀 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Version:** ${{ needs.build-and-push.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Triggered by:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | Status | Environment |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|-------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Build & Push | ${{ needs.build-and-push.result }} | - |" >> $GITHUB_STEP_SUMMARY
+          echo "| Staging Deploy | ${{ needs.deploy-staging.result }} | https://staging.pocwhisp.com |" >> $GITHUB_STEP_SUMMARY
+          echo "| Production Deploy | ${{ needs.deploy-production.result }} | https://api.pocwhisp.com |" >> $GITHUB_STEP_SUMMARY
+          echo "| Post-Deploy Tests | ${{ needs.post-deployment-tests.result }} | - |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [[ "${{ needs.deploy-production.result }}" == "success" ]]; then
+            echo "✅ **Deployment successful!** Production is updated and healthy." >> $GITHUB_STEP_SUMMARY
+          elif [[ "${{ needs.deploy-staging.result }}" == "success" ]]; then
+            echo "🟡 **Staging deployed successfully.** Production deployment pending or skipped." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **Deployment failed.** Please check the logs and try again." >> $GITHUB_STEP_SUMMARY
+          fi

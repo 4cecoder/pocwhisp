@@ -1,0 +1,50 @@
+# Core FastAPI dependencies
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+pydantic==2.5.0
+
+# Audio processing
+librosa==0.10.1
+soundfile==0.12.1
+numpy==1.24.3
+scipy==1.11.4
+
+# AI/ML models
+torch==2.1.1
+torchaudio==2.1.1
+transformers==4.36.0
+accelerate==0.25.0
+optimum==1.16.0
+
+# Whisper (OpenAI)
+openai-whisper==20231117
+
+# Alternative Whisper implementations
+# whisper-timestamped==1.14.2  # For better timestamp accuracy
+# faster-whisper==0.10.0       # For faster inference
+
+# Llama integration
+# llama-cpp-python==0.2.20     # CPU inference
+# vllm==0.2.5                  # GPU-optimized inference
+
+# Utilities
+requests==2.31.0
+aiofiles==23.2.1
+python-dotenv==1.0.0
+psutil==5.9.6
+
+# Logging and monitoring
+structlog==23.2.0
+prometheus-client==0.19.0
+
+# Development and testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+httpx==0.25.2
+
+# Optional: GPU acceleration
+# nvidia-ml-py==12.535.108
+
+# Note: For production, pin exact versions
+# Run: pip freeze > requirements-lock.txt

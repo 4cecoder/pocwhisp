@@ -1,0 +1,173 @@
+# Multi-stage Dockerfile for Python AI Service
+# Optimized for GPU support and production deployment
+
+# Base stage with CUDA support
+FROM nvidia/cuda:12.1-devel-ubuntu22.04 AS base
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    python3.11 \
+    python3.11-dev \
+    python3.11-distutils \
+    python3-pip \
+    curl \
+    wget \
+    git \
+    build-essential \
+    cmake \
+    pkg-config \
+    libsndfile1-dev \
+    libsndfile1 \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create symlinks for python
+RUN ln -sf /usr/bin/python3.11 /usr/bin/python3 && \
+    ln -sf /usr/bin/python3.11 /usr/bin/python
+
+# Upgrade pip
+RUN python3 -m pip install --upgrade pip
+
+# Development stage
+FROM base AS development
+
+WORKDIR /app
+
+# Copy requirements first for better caching
+COPY ai/requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy source code
+COPY ai/ .
+
+# Create non-root user
+RUN useradd -m -u 1001 pocwhisp && \
+    chown -R pocwhisp:pocwhisp /app
+
+USER pocwhisp
+
+EXPOSE 8081
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8081/health/live || exit 1
+
+CMD ["python", "main.py"]
+
+# Production stage
+FROM base AS production
+
+# Install only production dependencies
+RUN pip install --no-cache-dir \
+    fastapi==0.104.1 \
+    uvicorn[standard]==0.24.0 \
+    python-multipart==0.0.6 \
+    pydantic==2.5.0 \
+    pydantic-settings==2.7.1 \
+    aiofiles==23.2.1 \
+    structlog==23.2.0 \
+    numpy==1.24.3 \
+    torch==2.1.1 \
+    torchaudio==2.1.1 \
+    librosa==0.10.1 \
+    soundfile==0.12.1 \
+    openai-whisper==20231117
+
+WORKDIR /app
+
+# Copy only necessary files
+COPY ai/main.py .
+COPY ai/config.py .
+COPY ai/models/ ./models/
+COPY ai/services/ ./services/
+COPY ai/api/ ./api/
+
+# Create non-root user
+RUN useradd -m -u 1001 pocwhisp && \
+    mkdir -p /app/models /app/tmp && \
+    chown -R pocwhisp:pocwhisp /app
+
+USER pocwhisp
+
+EXPOSE 8081
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8081/health/live || exit 1
+
+# Set default environment variables
+ENV AI_HOST=0.0.0.0
+ENV AI_PORT=8081
+ENV DEVICE=auto
+ENV WHISPER_MODEL=base
+ENV LOG_LEVEL=INFO
+
+CMD ["python", "main.py"]
+
+# CPU-only stage for environments without GPU
+FROM python:3.11-slim AS cpu-only
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    ffmpeg \
+    libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install CPU-only dependencies
+RUN pip install --no-cache-dir \
+    fastapi==0.104.1 \
+    uvicorn[standard]==0.24.0 \
+    python-multipart==0.0.6 \
+    pydantic==2.5.0 \
+    pydantic-settings==2.7.1 \
+    aiofiles==23.2.1 \
+    structlog==23.2.0 \
+    numpy==1.24.3 \
+    torch==2.1.1+cpu \
+    torchaudio==2.1.1+cpu \
+    librosa==0.10.1 \
+    soundfile==0.12.1 \
+    openai-whisper==20231117 \
+    --index-url https://download.pytorch.org/whl/cpu
+
+# Copy source code
+COPY ai/main.py .
+COPY ai/config.py .
+COPY ai/models/ ./models/
+COPY ai/services/ ./services/
+COPY ai/api/ ./api/
+
+# Create non-root user
+RUN useradd -m -u 1001 pocwhisp && \
+    mkdir -p /app/models /app/tmp && \
+    chown -R pocwhisp:pocwhisp /app
+
+USER pocwhisp
+
+EXPOSE 8081
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8081/health/live || exit 1
+
+# Force CPU usage
+ENV DEVICE=cpu
+ENV AI_HOST=0.0.0.0
+ENV AI_PORT=8081
+ENV WHISPER_MODEL=tiny
+ENV LOG_LEVEL=INFO
+
+CMD ["python", "main.py"]

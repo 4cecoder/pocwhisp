@@ -1,0 +1,68 @@
+# Multi-stage Dockerfile for Go API
+# Optimized for production deployment with minimal image size
+
+# Build stage
+FROM golang:1.21-alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache git gcc musl-dev
+
+# Set working directory
+WORKDIR /build
+
+# Copy go mod files
+COPY api/go.mod api/go.sum ./
+
+# Download dependencies
+RUN go mod download
+
+# Copy source code
+COPY api/ .
+
+# Build the application with optimizations
+RUN CGO_ENABLED=1 GOOS=linux go build \
+    -ldflags='-w -s -extldflags "-static"' \
+    -a -installsuffix cgo \
+    -o pocwhisp main.go
+
+# Production stage
+FROM alpine:3.19
+
+# Install runtime dependencies
+RUN apk add --no-cache \
+    ca-certificates \
+    tzdata \
+    curl \
+    && rm -rf /var/cache/apk/*
+
+# Create non-root user
+RUN addgroup -g 1001 -S pocwhisp && \
+    adduser -u 1001 -S pocwhisp -G pocwhisp
+
+# Create app directory
+WORKDIR /app
+
+# Copy binary from builder stage
+COPY --from=builder /build/pocwhisp .
+
+# Create necessary directories
+RUN mkdir -p /tmp/pocwhisp && \
+    chown -R pocwhisp:pocwhisp /app /tmp/pocwhisp
+
+# Switch to non-root user
+USER pocwhisp
+
+# Expose port
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:8080/api/v1/live || exit 1
+
+# Set default environment variables
+ENV GIN_MODE=release
+ENV PORT=8080
+ENV AI_SERVICE_URL=http://ai-service:8081
+
+# Run the application
+CMD ["./pocwhisp"]

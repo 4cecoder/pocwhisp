@@ -1,0 +1,445 @@
+name: CI - Continuous Integration
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+env:
+  GO_VERSION: "1.21"
+  PYTHON_VERSION: "3.11"
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # =============================================================================
+  # CODE QUALITY & SECURITY
+  # =============================================================================
+
+  lint-and-security:
+    name: Code Quality & Security
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # Go linting and security
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v3
+        with:
+          version: latest
+          working-directory: api
+
+      - name: Run gosec security scanner
+        uses: securecodewarrior/github-action-gosec@master
+        with:
+          args: "./api/..."
+
+      # Python linting and security
+      - name: Install Python dependencies
+        run: |
+          cd ai
+          python -m pip install --upgrade pip
+          pip install flake8 black isort bandit safety
+          pip install -r requirements.txt
+
+      - name: Run Python linting
+        run: |
+          cd ai
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+          black --check .
+          isort --check-only .
+
+      - name: Run Python security checks
+        run: |
+          cd ai
+          bandit -r . -x */tests/*
+          safety check
+
+      # Dependency vulnerability scanning
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          format: "sarif"
+          output: "trivy-results.sarif"
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: "trivy-results.sarif"
+
+  # =============================================================================
+  # UNIT TESTS
+  # =============================================================================
+
+  test-go:
+    name: Go Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          cd api
+          go mod download
+          go mod verify
+
+      - name: Run tests with coverage
+        run: |
+          cd api
+          go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+          go tool cover -html=coverage.out -o coverage.html
+
+      - name: Upload Go coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./api/coverage.out
+          flags: go
+          name: go-coverage
+
+      - name: Upload coverage artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: go-coverage
+          path: |
+            api/coverage.out
+            api/coverage.html
+
+  test-python:
+    name: Python Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          cd ai
+          python -m pip install --upgrade pip
+          pip install pytest pytest-cov pytest-asyncio httpx
+          pip install -r requirements.txt
+
+      - name: Run tests with coverage
+        run: |
+          cd ai
+          pytest tests/ -v --cov=. --cov-report=xml --cov-report=html --cov-report=term
+        env:
+          DEVICE: cpu # Force CPU for CI
+          WHISPER_MODEL: tiny
+
+      - name: Upload Python coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./ai/coverage.xml
+          flags: python
+          name: python-coverage
+
+      - name: Upload coverage artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: python-coverage
+          path: |
+            ai/coverage.xml
+            ai/htmlcov/
+
+  # =============================================================================
+  # INTEGRATION TESTS
+  # =============================================================================
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [test-go, test-python]
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: pocwhisp_test
+          POSTGRES_USER: pocwhisp
+          POSTGRES_PASSWORD: test_password
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: |
+          # Go dependencies
+          cd api && go mod download
+
+          # Python dependencies
+          cd ../ai
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+          # Test dependencies
+          cd ../tests
+          pip install requests numpy scipy librosa soundfile
+
+      - name: Create test audio files
+        run: |
+          cd tests
+          python create_test_audio.py
+
+      - name: Run integration tests
+        run: |
+          cd tests
+          python integration_test.py
+        env:
+          DB_HOST: localhost
+          DB_PORT: 5432
+          DB_NAME: pocwhisp_test
+          DB_USER: pocwhisp
+          DB_PASSWORD: test_password
+          REDIS_URL: redis://localhost:6379
+          DEVICE: cpu
+          WHISPER_MODEL: tiny
+
+      - name: Upload integration test results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: integration-test-results
+          path: tests/results/
+
+  # =============================================================================
+  # DOCKER BUILD & TEST
+  # =============================================================================
+
+  docker-build:
+    name: Docker Build & Test
+    runs-on: ubuntu-latest
+    needs: [lint-and-security]
+    strategy:
+      matrix:
+        service: [api, ai]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/Dockerfile.${{ matrix.service }}
+          target: ${{ matrix.service == 'ai' && 'cpu-only' || 'production' }}
+          push: false
+          tags: pocwhisp-${{ matrix.service }}:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Test Docker image
+        run: |
+          # Test that image runs and responds to health checks
+          docker run -d --name test-${{ matrix.service }} \
+            -p ${{ matrix.service == 'api' && '8080:8080' || '8081:8081' }} \
+            pocwhisp-${{ matrix.service }}:test
+
+          # Wait for service to start
+          sleep 30
+
+          # Health check
+          if [ "${{ matrix.service }}" = "api" ]; then
+            curl -f http://localhost:8080/api/v1/health || exit 1
+          else
+            curl -f http://localhost:8081/health/live || exit 1
+          fi
+
+          # Cleanup
+          docker stop test-${{ matrix.service }}
+          docker rm test-${{ matrix.service }}
+
+      - name: Scan Docker image for vulnerabilities
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: pocwhisp-${{ matrix.service }}:test
+          format: "sarif"
+          output: "docker-trivy-${{ matrix.service }}.sarif"
+
+      - name: Upload Docker scan results
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: "docker-trivy-${{ matrix.service }}.sarif"
+
+  # =============================================================================
+  # DOCKER COMPOSE INTEGRATION
+  # =============================================================================
+
+  docker-compose-test:
+    name: Docker Compose Integration
+    runs-on: ubuntu-latest
+    needs: [docker-build, integration-tests]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Create test environment
+        run: |
+          cd docker
+          cp env.example .env
+          echo "WHISPER_MODEL=tiny" >> .env
+          echo "LOG_LEVEL=DEBUG" >> .env
+          echo "DB_PASSWORD=test_password" >> .env
+
+      - name: Run Docker Compose tests
+        run: |
+          cd tests
+          python docker_test.py
+        timeout-minutes: 20
+
+      - name: Collect Docker logs
+        if: always()
+        run: |
+          cd docker
+          mkdir -p ../logs
+          docker-compose logs api > ../logs/api.log 2>&1 || true
+          docker-compose logs ai-service-cpu > ../logs/ai.log 2>&1 || true
+          docker-compose logs database > ../logs/db.log 2>&1 || true
+          docker-compose down -v || true
+
+      - name: Upload Docker logs
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: docker-compose-logs
+          path: logs/
+
+  # =============================================================================
+  # PERFORMANCE TESTS
+  # =============================================================================
+
+  performance-tests:
+    name: Performance Benchmarks
+    runs-on: ubuntu-latest
+    needs: [integration-tests]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install performance testing tools
+        run: |
+          pip install locust pytest-benchmark
+          cd tests && pip install -r requirements.txt
+
+      - name: Run performance benchmarks
+        run: |
+          cd tests
+          python performance_test.py --duration=300 --users=10
+        timeout-minutes: 10
+
+      - name: Upload performance results
+        uses: actions/upload-artifact@v3
+        with:
+          name: performance-results
+          path: tests/performance-results/
+
+  # =============================================================================
+  # BUILD STATUS SUMMARY
+  # =============================================================================
+
+  build-summary:
+    name: Build Summary
+    runs-on: ubuntu-latest
+    needs:
+      [
+        lint-and-security,
+        test-go,
+        test-python,
+        integration-tests,
+        docker-build,
+        docker-compose-test,
+      ]
+    if: always()
+    steps:
+      - name: Check build status
+        run: |
+          echo "## 🚀 CI Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Lint & Security | ${{ needs.lint-and-security.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Go Tests | ${{ needs.test-go.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Python Tests | ${{ needs.test-python.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Integration Tests | ${{ needs.integration-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Docker Build | ${{ needs.docker-build.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Docker Compose | ${{ needs.docker-compose-test.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [[ "${{ needs.lint-and-security.result }}" == "success" && \
+                "${{ needs.test-go.result }}" == "success" && \
+                "${{ needs.test-python.result }}" == "success" && \
+                "${{ needs.integration-tests.result }}" == "success" && \
+                "${{ needs.docker-build.result }}" == "success" && \
+                "${{ needs.docker-compose-test.result }}" == "success" ]]; then
+            echo "✅ **All checks passed!** Ready for deployment." >> $GITHUB_STEP_SUMMARY
+            exit 0
+          else
+            echo "❌ **Some checks failed.** Please review the errors above." >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi

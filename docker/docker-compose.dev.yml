@@ -1,0 +1,140 @@
+version: '3.8'
+
+# Development docker-compose with hot reloading and debug features
+services:
+  # SQLite database for development (simpler than PostgreSQL)
+  # API service in development mode
+  api-dev:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    container_name: pocwhisp-api-dev
+    environment:
+      - PORT=8080
+      - AI_SERVICE_URL=http://ai-service-dev:8081
+      - LOG_LEVEL=DEBUG
+      - GIN_MODE=debug
+    volumes:
+      - ../api:/app/src:ro
+      - api_dev_data:/app/data
+      - api_dev_temp:/tmp/pocwhisp
+    ports:
+      - "8080:8080"
+    depends_on:
+      - ai-service-dev
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/v1/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - pocwhisp-dev-network
+
+  # AI Service in development mode with hot reloading
+  ai-service-dev:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.ai
+      target: development
+    container_name: pocwhisp-ai-dev
+    environment:
+      - AI_HOST=0.0.0.0
+      - AI_PORT=8081
+      - DEVICE=cpu  # Use CPU for development to avoid GPU conflicts
+      - WHISPER_MODEL=tiny  # Faster loading for development
+      - LOG_LEVEL=DEBUG
+      - CORS_ORIGINS=["*"]
+    volumes:
+      - ../ai:/app:rw
+      - ai_dev_models:/app/models
+      - ai_dev_temp:/app/tmp
+    ports:
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - pocwhisp-dev-network
+    command: ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8081", "--reload"]
+
+  # Redis for development
+  redis-dev:
+    image: redis:7-alpine
+    container_name: pocwhisp-redis-dev
+    command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_dev_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - pocwhisp-dev-network
+
+  # Development tools container
+  dev-tools:
+    image: alpine:3.19
+    container_name: pocwhisp-dev-tools
+    volumes:
+      - ../:/workspace:rw
+    working_dir: /workspace
+    command: tail -f /dev/null
+    networks:
+      - pocwhisp-dev-network
+    profiles:
+      - tools
+
+  # Test runner
+  test-runner:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.ai
+      target: development
+    container_name: pocwhisp-test-runner
+    environment:
+      - PYTHONPATH=/app
+    volumes:
+      - ../:/workspace:ro
+      - test_results:/test-results
+    working_dir: /workspace
+    command: |
+      sh -c "
+        echo 'Installing test dependencies...'
+        pip install pytest pytest-asyncio httpx
+        echo 'Running tests...'
+        python -m pytest tests/ -v --tb=short --junitxml=/test-results/results.xml
+      "
+    networks:
+      - pocwhisp-dev-network
+    profiles:
+      - test
+
+volumes:
+  redis_dev_data:
+    driver: local
+  ai_dev_models:
+    driver: local
+  ai_dev_temp:
+    driver: local
+  api_dev_temp:
+    driver: local
+  api_dev_data:
+    driver: local
+  test_results:
+    driver: local
+
+networks:
+  pocwhisp-dev-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16

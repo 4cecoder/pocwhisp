@@ -1,0 +1,486 @@
+name: Security Monitoring
+
+on:
+  schedule:
+    # Run security scans daily at 2 AM UTC
+    - cron: "0 2 * * *"
+  push:
+    branches: [main]
+    paths:
+      - "api/go.mod"
+      - "api/go.sum"
+      - "ai/requirements.txt"
+      - "docker/Dockerfile.*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  # =============================================================================
+  # DEPENDENCY VULNERABILITY SCANNING
+  # =============================================================================
+
+  dependency-scan:
+    name: Dependency Vulnerability Scan
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        component: [go-api, python-ai]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go (for Go dependencies)
+        if: matrix.component == 'go-api'
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.21"
+
+      - name: Set up Python (for Python dependencies)
+        if: matrix.component == 'python-ai'
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      # Go dependency scanning
+      - name: Run Go vulnerability scan
+        if: matrix.component == 'go-api'
+        run: |
+          cd api
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+      - name: Run Go mod audit
+        if: matrix.component == 'go-api'
+        run: |
+          cd api
+          go list -json -deps ./... | jq -r '.Module | select(.Path != null) | .Path + "@" + .Version' | sort -u > go-dependencies.txt
+          echo "📦 Go dependencies scanned: $(wc -l < go-dependencies.txt)"
+
+      # Python dependency scanning
+      - name: Install Python dependencies
+        if: matrix.component == 'python-ai'
+        run: |
+          cd ai
+          python -m pip install --upgrade pip
+          pip install safety piprot pip-audit
+          pip install -r requirements.txt
+
+      - name: Run Python safety scan
+        if: matrix.component == 'python-ai'
+        run: |
+          cd ai
+          safety check --json --output safety-report.json || true
+          safety check --short-report
+
+      - name: Run pip-audit scan
+        if: matrix.component == 'python-ai'
+        run: |
+          cd ai
+          pip-audit --format=json --output=pip-audit-report.json || true
+          pip-audit --desc
+
+      - name: Check for outdated packages
+        if: matrix.component == 'python-ai'
+        run: |
+          cd ai
+          piprot requirements.txt
+
+      - name: Upload vulnerability reports
+        uses: actions/upload-artifact@v3
+        if: matrix.component == 'python-ai'
+        with:
+          name: python-security-reports
+          path: |
+            ai/safety-report.json
+            ai/pip-audit-report.json
+
+  # =============================================================================
+  # CODE SECURITY ANALYSIS
+  # =============================================================================
+
+  codeql-analysis:
+    name: CodeQL Analysis
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ["go", "python"]
+        include:
+          - language: go
+            path: "./api"
+          - language: python
+            path: "./ai"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v2
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended,security-and-quality
+          source-root: ${{ matrix.path }}
+
+      - name: Set up Go
+        if: matrix.language == 'go'
+        uses: actions/setup-go@v4
+        with:
+          go-version: "1.21"
+
+      - name: Build Go code
+        if: matrix.language == 'go'
+        run: |
+          cd api
+          go mod download
+          go build ./...
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v2
+        with:
+          category: "/language:${{ matrix.language }}"
+
+  # =============================================================================
+  # CONTAINER SECURITY SCANNING
+  # =============================================================================
+
+  container-security:
+    name: Container Security Scan
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'schedule'
+    strategy:
+      matrix:
+        service: [api, ai]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image for scanning
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/Dockerfile.${{ matrix.service }}
+          target: ${{ matrix.service == 'ai' && 'cpu-only' || '' }}
+          push: false
+          tags: pocwhisp-${{ matrix.service }}:security-scan
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Trivy vulnerability scanning
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: pocwhisp-${{ matrix.service }}:security-scan
+          format: "sarif"
+          output: "trivy-${{ matrix.service }}.sarif"
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: "trivy-${{ matrix.service }}.sarif"
+
+      # Docker Scout scanning (if available)
+      - name: Docker Scout scan
+        uses: docker/scout-action@v1
+        if: github.event_name == 'push'
+        with:
+          command: cves
+          image: pocwhisp-${{ matrix.service }}:security-scan
+          only-severities: critical,high
+          exit-code: true
+        continue-on-error: true
+
+      # Snyk scanning
+      - name: Run Snyk to check Docker image for vulnerabilities
+        uses: snyk/actions/docker@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          image: pocwhisp-${{ matrix.service }}:security-scan
+          args: --severity-threshold=high --file=docker/Dockerfile.${{ matrix.service }}
+        continue-on-error: true
+
+  # =============================================================================
+  # SECRETS SCANNING
+  # =============================================================================
+
+  secrets-scan:
+    name: Secrets Detection
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Full history for better detection
+
+      - name: Run GitLeaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          config-path: .gitleaks.toml
+
+      - name: Run TruffleHog
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: main
+          head: HEAD
+          extra_args: --debug --only-verified
+
+  # =============================================================================
+  # INFRASTRUCTURE SECURITY
+  # =============================================================================
+
+  infrastructure-scan:
+    name: Infrastructure Security
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Checkov on Docker configurations
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: docker/
+          framework: dockerfile
+          output_format: sarif
+          output_file_path: checkov-docker.sarif
+
+      - name: Upload Checkov scan results
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: checkov-docker.sarif
+
+      - name: Scan Docker Compose for misconfigurations
+        run: |
+          docker run --rm -v $(pwd):/src \
+            aquasec/trivy config /src/docker/docker-compose.yml \
+            --format sarif --output /src/trivy-compose.sarif || true
+
+      - name: Upload Docker Compose scan results
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: trivy-compose.sarif
+
+  # =============================================================================
+  # COMPLIANCE CHECKS
+  # =============================================================================
+
+  compliance-check:
+    name: Compliance & Best Practices
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Docker best practices check
+        run: |
+          # Check for common Docker security issues
+          echo "🔍 Checking Docker best practices..."
+
+          # Check for running as root
+          for dockerfile in docker/Dockerfile.*; do
+            if ! grep -q "USER" "$dockerfile"; then
+              echo "⚠️  Warning: $dockerfile does not specify a USER directive"
+            fi
+          done
+
+          # Check for hardcoded secrets
+          if grep -r "password\|secret\|key" docker/ --include="*.yml" --include="*.yaml"; then
+            echo "⚠️  Warning: Potential hardcoded secrets found in Docker configs"
+          fi
+
+          # Check for latest tag usage
+          if grep -r ":latest" docker/ --include="*.yml" --include="*.yaml"; then
+            echo "⚠️  Warning: Using 'latest' tag found in Docker configs"
+          fi
+
+      - name: Go security best practices
+        run: |
+          cd api
+          echo "🔍 Checking Go security best practices..."
+
+          # Check for potential security issues
+          go install github.com/securecodewarrior/gosec/v2/cmd/gosec@latest
+          gosec -fmt sarif -out gosec-report.sarif ./... || true
+          gosec -fmt text ./...
+
+      - name: Upload Go security scan
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: api/gosec-report.sarif
+
+      - name: Python security best practices
+        run: |
+          cd ai
+          echo "🔍 Checking Python security best practices..."
+
+          pip install bandit
+          bandit -r . -f json -o bandit-report.json || true
+          bandit -r . -f txt
+
+      - name: Upload Python security scan
+        uses: actions/upload-artifact@v3
+        with:
+          name: python-bandit-report
+          path: ai/bandit-report.json
+
+  # =============================================================================
+  # SECURITY MONITORING DASHBOARD
+  # =============================================================================
+
+  security-dashboard:
+    name: Security Dashboard Update
+    runs-on: ubuntu-latest
+    needs:
+      [
+        dependency-scan,
+        codeql-analysis,
+        container-security,
+        secrets-scan,
+        infrastructure-scan,
+        compliance-check,
+      ]
+    if: always()
+    steps:
+      - name: Generate security summary
+        run: |
+          echo "## 🔒 Security Scan Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Scan Date:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "**Repository:** ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Scan Type | Status | Details |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|--------|---------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Dependency Scan | ${{ needs.dependency-scan.result }} | Go & Python dependencies |" >> $GITHUB_STEP_SUMMARY
+          echo "| CodeQL Analysis | ${{ needs.codeql-analysis.result }} | Static code analysis |" >> $GITHUB_STEP_SUMMARY
+          echo "| Container Security | ${{ needs.container-security.result }} | Docker image vulnerabilities |" >> $GITHUB_STEP_SUMMARY
+          echo "| Secrets Detection | ${{ needs.secrets-scan.result }} | GitLeaks & TruffleHog |" >> $GITHUB_STEP_SUMMARY
+          echo "| Infrastructure | ${{ needs.infrastructure-scan.result }} | Docker & IaC configs |" >> $GITHUB_STEP_SUMMARY
+          echo "| Compliance | ${{ needs.compliance-check.result }} | Best practices & policies |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Count successful scans
+          SUCCESS_COUNT=0
+          TOTAL_COUNT=6
+
+          [[ "${{ needs.dependency-scan.result }}" == "success" ]] && ((SUCCESS_COUNT++))
+          [[ "${{ needs.codeql-analysis.result }}" == "success" ]] && ((SUCCESS_COUNT++))
+          [[ "${{ needs.container-security.result }}" == "success" ]] && ((SUCCESS_COUNT++))
+          [[ "${{ needs.secrets-scan.result }}" == "success" ]] && ((SUCCESS_COUNT++))
+          [[ "${{ needs.infrastructure-scan.result }}" == "success" ]] && ((SUCCESS_COUNT++))
+          [[ "${{ needs.compliance-check.result }}" == "success" ]] && ((SUCCESS_COUNT++))
+
+          echo "**Security Score:** $SUCCESS_COUNT/$TOTAL_COUNT scans passed" >> $GITHUB_STEP_SUMMARY
+
+          if [ $SUCCESS_COUNT -eq $TOTAL_COUNT ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "✅ **All security scans passed!** The codebase meets security standards." >> $GITHUB_STEP_SUMMARY
+          elif [ $SUCCESS_COUNT -ge 4 ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "🟡 **Most security scans passed.** Please review any failed scans." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "❌ **Multiple security issues detected.** Please address the findings immediately." >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📊 **View detailed results in the Security tab:** https://github.com/${{ github.repository }}/security" >> $GITHUB_STEP_SUMMARY
+
+      - name: Create security issue (if critical vulnerabilities found)
+        if: |
+          needs.dependency-scan.result == 'failure' || 
+          needs.container-security.result == 'failure' || 
+          needs.secrets-scan.result == 'failure'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const title = `🚨 Critical Security Vulnerabilities Detected - ${new Date().toISOString().split('T')[0]}`;
+            const body = `
+            ## Security Alert
+
+            Critical security vulnerabilities have been detected in the latest security scan.
+
+            **Scan Details:**
+            - **Date:** ${new Date().toISOString()}
+            - **Workflow:** ${{ github.workflow }}
+            - **Run ID:** ${{ github.run_id }}
+            - **Commit:** ${{ github.sha }}
+
+            **Failed Scans:**
+            ${ '${{ needs.dependency-scan.result }}' === 'failure' ? '- ❌ Dependency vulnerabilities detected' : '' }
+            ${ '${{ needs.container-security.result }}' === 'failure' ? '- ❌ Container security issues found' : '' }
+            ${ '${{ needs.secrets-scan.result }}' === 'failure' ? '- ❌ Secrets or credentials exposed' : '' }
+
+            **Action Required:**
+            1. Review the detailed security scan results in the Actions tab
+            2. Address all critical and high-severity vulnerabilities
+            3. Update dependencies and fix configuration issues
+            4. Re-run security scans to verify fixes
+
+            **Resources:**
+            - [Security Scan Results](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            - [Security Tab](https://github.com/${{ github.repository }}/security)
+            - [Security Policy](https://github.com/${{ github.repository }}/security/policy)
+
+            ---
+            *This issue was automatically created by the security monitoring workflow.*
+            `;
+
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: title,
+              body: body,
+              labels: ['security', 'critical', 'automated']
+            });
+
+  # =============================================================================
+  # NOTIFICATION
+  # =============================================================================
+
+  notify-security-team:
+    name: Notify Security Team
+    runs-on: ubuntu-latest
+    needs: [security-dashboard]
+    if: failure()
+    steps:
+      - name: Send Slack notification
+        uses: 8398a7/action-slack@v3
+        with:
+          status: "warning"
+          text: |
+            🚨 SECURITY ALERT - Critical vulnerabilities detected
+            Repository: ${{ github.repository }}
+            Workflow: ${{ github.workflow }}
+            Details: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SECURITY_SLACK_WEBHOOK_URL }}
+
+      - name: Send email notification
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 587
+          username: ${{ secrets.EMAIL_USERNAME }}
+          password: ${{ secrets.EMAIL_PASSWORD }}
+          subject: 🚨 Security Alert - ${{ github.repository }}
+          body: |
+            Critical security vulnerabilities have been detected in ${{ github.repository }}.
+
+            Please review the security scan results immediately:
+            https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          to: ${{ secrets.SECURITY_TEAM_EMAIL }}
+        continue-on-error: true
