@@ -1,0 +1,158 @@
+# PocWhisp Performance Configuration
+# Production-ready performance optimization settings
+
+api_url: "http://localhost:8080"
+auth_token: "" # JWT token for authenticated endpoints
+
+# Performance monitoring thresholds
+thresholds:
+  cpu:
+    warning: 80    # CPU usage warning threshold (%)
+    critical: 90   # CPU usage critical threshold (%)
+  
+  memory:
+    warning: 85    # Memory usage warning threshold (%)
+    critical: 95   # Memory usage critical threshold (%)
+  
+  disk:
+    warning: 85    # Disk usage warning threshold (%)
+    critical: 95   # Disk usage critical threshold (%)
+  
+  response_time:
+    warning: 500   # Response time warning threshold (ms)
+    critical: 1000 # Response time critical threshold (ms)
+  
+  gc_pause:
+    warning: 10    # GC pause warning threshold (ms)
+    critical: 50   # GC pause critical threshold (ms)
+
+# Optimization settings
+optimization:
+  # Garbage collection optimization
+  gc:
+    auto_tune: true
+    target_percentage: 100  # GOGC percentage
+    memory_limit_ratio: 0.8 # Use 80% of available memory
+  
+  # Connection pool optimization
+  database:
+    max_open_conns: 100
+    max_idle_conns: 10
+    conn_max_lifetime: "1h"
+    conn_max_idle_time: "10m"
+  
+  # Request processing optimization
+  request_pool:
+    max_concurrent: 1000
+    queue_size: 5000
+    worker_count: 16  # 2x CPU cores
+  
+  # Cache optimization
+  cache:
+    hit_rate_target: 0.85
+    warmup_schedule: "5m"
+    compression_enabled: true
+    ttl_optimization: true
+  
+  # Response optimization
+  response:
+    compression_enabled: true
+    compression_min_size: 1024
+    compression_level: 6
+    cache_static_assets: true
+    enable_etag: true
+
+# Monitoring configuration
+monitoring:
+  metrics_update_interval: "30s"
+  profiler_enabled: true
+  slow_request_threshold: "1s"
+  enable_server_timing: true
+
+# Alert configuration
+alerts:
+  enabled: true
+  webhook_url: ""  # Slack/Discord webhook for alerts
+  email_notifications: []
+  
+  # Alert rules
+  rules:
+    - name: "High CPU Usage"
+      condition: "cpu_usage > 90"
+      severity: "critical"
+      
+    - name: "High Memory Usage"
+      condition: "memory_usage > 95"
+      severity: "critical"
+      
+    - name: "Slow Response Time"
+      condition: "response_time > 1000"
+      severity: "warning"
+      
+    - name: "High Error Rate"
+      condition: "error_rate > 5"
+      severity: "warning"
+
+# Load testing configuration
+load_testing:
+  enabled: false
+  scenarios:
+    - name: "normal_load"
+      users: 50
+      spawn_rate: 5
+      duration: "5m"
+      
+    - name: "stress_test"
+      users: 200
+      spawn_rate: 20
+      duration: "2m"
+      
+    - name: "spike_test"
+      users: 500
+      spawn_rate: 100
+      duration: "30s"
+
+# Resource limits (for containerized deployments)
+resources:
+  cpu:
+    request: "500m"
+    limit: "2000m"
+  
+  memory:
+    request: "512Mi"
+    limit: "2Gi"
+  
+  storage:
+    request: "10Gi"
+    limit: "100Gi"
+
+# Environment-specific overrides
+environments:
+  development:
+    monitoring:
+      metrics_update_interval: "10s"
+    optimization:
+      gc:
+        target_percentage: 50
+      database:
+        max_open_conns: 25
+  
+  staging:
+    thresholds:
+      cpu:
+        warning: 70
+        critical: 85
+    optimization:
+      database:
+        max_open_conns: 50
+  
+  production:
+    thresholds:
+      cpu:
+        warning: 80
+        critical: 90
+    optimization:
+      database:
+        max_open_conns: 100
+    alerts:
+      enabled: true
